@@ -1,0 +1,32 @@
+# Overrides de DESENVOLVIMENTO.
+# O Docker Compose carrega este arquivo automaticamente quando presente.
+# Na VPS, suba com:  docker compose -f docker-compose.yml up -d
+# (ou simplesmente nao versione/copie este arquivo para la).
+#
+# O que muda aqui:
+#   - portas publicadas em 127.0.0.1 para acessar do WSL/navegador
+#   - bot roda com tsx watch (hot reload) em vez do build compilado
+#   - logs mais verbosos
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  evolution:
+    ports:
+      # Necessario para abrir o Evolution Manager e ler o QR code.
+      - "127.0.0.1:8080:8080"
+
+  bot:
+    build:
+      target: dev
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+    command: ["npm", "run", "dev"]
+    volumes:
+      # Hot reload: editar ./bot/src reinicia o servidor sem rebuild.
+      - ./bot/src:/app/src:ro
+    ports:
+      - "127.0.0.1:3000:3000"

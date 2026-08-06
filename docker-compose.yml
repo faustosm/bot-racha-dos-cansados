@@ -1,0 +1,182 @@
+name: racha
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: racha_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Lido pelo script de init para criar o database do bot.
+      BOT_DB: ${BOT_DB}
+      TZ: ${TZ}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Cria o database "racha" ao lado do "evolution".
+      # ATENCAO: so roda na primeira inicializacao, com o volume vazio.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - racha-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: racha_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    environment:
+      TZ: ${TZ}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - racha-net
+
+  evolution:
+    image: evoapicloud/evolution-api:v2.3.7
+    container_name: racha_evolution
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+      SERVER_URL: ${EVOLUTION_SERVER_URL}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: racha
+
+      # Nao guardamos historico do grupo: o banco cresceria sem parar e sao
+      # dados de terceiros. O bot persiste apenas o que precisa, no db "racha".
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: racha
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      # Webhook e configurado por instancia via scripts/setup-instance.sh,
+      # nao globalmente: fica versionado e reproduzivel.
+      WEBHOOK_GLOBAL_ENABLED: "false"
+
+      # Nao deletar a instancia automaticamente quando a sessao cair.
+      DEL_INSTANCE: "false"
+
+      LOG_LEVEL: ${EVOLUTION_LOG_LEVEL}
+      LOG_COLOR: "true"
+      LOG_BAILEYS: error
+      LANGUAGE: pt-BR
+
+      CONFIG_SESSION_PHONE_CLIENT: ${SESSION_PHONE_CLIENT}
+      CONFIG_SESSION_PHONE_NAME: Chrome
+      QRCODE_LIMIT: "30"
+    volumes:
+      # CRITICO: guarda a sessao pareada do WhatsApp.
+      # Perder este volume = ler o QR code de novo.
+      - evolution_instances:/evolution/instances
+    healthcheck:
+      # Usa o proprio node em vez de wget/curl: nao dependemos de quais
+      # utilitarios a imagem base traz.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:8080/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - racha-net
+
+  bot:
+    build:
+      context: ./bot
+      target: runtime
+    image: racha-bot:local
+    container_name: racha_bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      evolution:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ}
+      NODE_ENV: production
+      BOT_PORT: "3000"
+      LOG_LEVEL: ${BOT_LOG_LEVEL}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${BOT_DB}
+      # DNS interno do Compose. Nunca "localhost": dentro do container
+      # localhost e o proprio container.
+      EVOLUTION_URL: http://evolution:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      WEBHOOK_TOKEN: ${WEBHOOK_TOKEN}
+      GROUP_JID: ${GROUP_JID}
+
+      # Regras do racha. Os defaults aqui valem se o .env nao definir - assim
+      # um .env antigo nao quebra o boot.
+      VAGAS_TOTAL: ${VAGAS_TOTAL:-20}
+      VAGAS_GOLEIRO: ${VAGAS_GOLEIRO:-2}
+      CRON_ABRE_FIXOS: ${CRON_ABRE_FIXOS:-0 12 * * 3}
+      CRON_ABRE_CONVIDADOS: ${CRON_ABRE_CONVIDADOS:-0 12 * * 4}
+      CRON_FECHA: ${CRON_FECHA:-0 7 * * 6}
+      CRON_ENCERRA: ${CRON_ENCERRA:-0 12 * * 6}
+      CRON_CHAMADA: ${CRON_CHAMADA:-0 8 * * 5}
+      ALERTA_VAGAS: ${ALERTA_VAGAS:-2}
+      MIN_JOGADORES: ${MIN_JOGADORES:-12}
+      MIN_GOLEIROS: ${MIN_GOLEIROS:-2}
+      CONVERSA_TTL_MIN: ${CONVERSA_TTL_MIN:-15}
+      BOT_NUMERO: ${BOT_NUMERO:-}
+
+      # Identidade do racha: nome, local, endereco e horario nos anuncios.
+      RACHA_NOME: ${RACHA_NOME:-Racha}
+      RACHA_LOCAL: ${RACHA_LOCAL:-}
+      RACHA_ENDERECO: ${RACHA_ENDERECO:-}
+      RACHA_HORARIO: ${RACHA_HORARIO:-09:00 as 11:00}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - racha-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:
+
+networks:
+  racha-net:
+    driver: bridge
