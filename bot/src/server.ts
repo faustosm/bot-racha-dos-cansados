@@ -3,6 +3,7 @@ import { config, isGroupConfigured } from './config.js';
 import { migrate, pool } from './db.js';
 import { tratarMensagem, tratarVoto } from './handlers.js';
 import { iniciarAgendador } from './scheduler.js';
+import { invalidarCache } from './grupo.js';
 
 const app = Fastify({
   logger: {
@@ -205,7 +206,10 @@ async function handleEvent(body: WebhookBody) {
       handleConnectionUpdate(data);
       break;
     case 'group.participants.update':
-      app.log.info({ data }, 'participantes do grupo mudaram');
+      // Entrou ou saiu alguem: a lista de membros mudou e o cache precisa cair,
+      // senao quem saiu continuaria sendo atendido ate o TTL expirar.
+      invalidarCache();
+      app.log.info({ data }, 'participantes do grupo mudaram, cache invalidado');
       break;
     case 'messages.update':
       // Nao usamos: o voto util chega em messages.upsert. Aqui vem so recibo

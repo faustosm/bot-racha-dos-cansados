@@ -26,25 +26,28 @@ const schema = z.object({
   RACHA_NOME: z.string().default('Racha'),
   RACHA_LOCAL: z.string().default(''),
   RACHA_ENDERECO: z.string().default(''),
-  RACHA_HORARIO: z.string().default('09:00 as 11:00'),
+  RACHA_HORARIO: z.string().default('09:00 às 11:00'),
 
   // --- Regras do racha -----------------------------------------------------
-  VAGAS_TOTAL: z.coerce.number().int().positive().default(20),
-  // Teto de goleiros, nao cota reservada: com 1 goleiro cabem 19 de linha.
-  VAGAS_GOLEIRO: z.coerce.number().int().nonnegative().default(2),
+  // A lista e SO de jogadores de linha. Os 2 goleiros sao contratados por fora
+  // e o bot nao os gerencia - eles aparecem apenas como texto nas mensagens,
+  // para o grupo entender que 18 na lista + 2 goleiros = time completo.
+  VAGAS_TOTAL: z.coerce.number().int().positive().default(18),
 
   // Cron do agendador (horario local do container, TZ=America/Sao_Paulo).
   CRON_ABRE_FIXOS: z.string().default('0 12 * * 3'), // quarta 12:00
   CRON_ABRE_CONVIDADOS: z.string().default('0 12 * * 4'), // quinta 12:00
   CRON_FECHA: z.string().default('0 7 * * 6'), // sabado 07:00 - fecha a lista
-  CRON_ENCERRA: z.string().default('0 12 * * 6'), // sabado 12:00 - fim do racha
   CRON_CHAMADA: z.string().default('0 8 * * 5'), // sexta 08:00 - chamada geral
+  // Quarta a sexta as 19:00 - unica hora em que o grupo recebe a lista sem que
+  // nada tenha acontecido. Confirmacao nao gera mensagem; so saida gera.
+  CRON_DIGEST: z.string().default('0 19 * * 3-5'),
 
   // Quando avisar que as vagas estao acabando.
   ALERTA_VAGAS: z.coerce.number().int().nonnegative().default(2),
-  // Minimo para o jogo acontecer. Abaixo disso, a chamada de sexta dispara.
+  // Minimo de jogadores de LINHA para o jogo acontecer: 6 de cada lado.
+  // Abaixo disso, a chamada de sexta dispara.
   MIN_JOGADORES: z.coerce.number().int().positive().default(12),
-  MIN_GOLEIROS: z.coerce.number().int().nonnegative().default(2),
 
   // Quanto tempo uma pergunta do bot fica valida no privado. Sem isso, um "3"
   // respondido tres dias depois viraria convidado fantasma.

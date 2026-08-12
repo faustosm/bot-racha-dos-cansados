@@ -6,14 +6,18 @@ import {
   definirStatus,
   fecharVencidas,
   garantirPartida,
-  marcarEncerrada,
-  partidaAEncerrar,
   partidaAtual,
   partidaParaLeitura,
   registrarEnquete,
 } from './domain/partida.js';
 import { OPCOES, tituloDaEnquete } from './domain/enquete.js';
-import { contarVagas, formatarLista, rotuloData } from './domain/lista.js';
+import { janelas, proximoSabado } from './domain/datas.js';
+import {
+  alertasDeVagas,
+  contarVagas,
+  formatarLista,
+  rotuloData,
+} from './domain/lista.js';
 import { limparExpiradas } from './conversa.js';
 
 export interface Log {
@@ -50,7 +54,8 @@ export async function anunciarAberturaFixos(
       `📅 ${rotuloData(partida.data_jogo)}, ${config.RACHA_HORARIO}`,
       ...(config.RACHA_ENDERECO ? [`📍 ${config.RACHA_ENDERECO}`] : []),
       '',
-      `Lista aberta! ${partida.vagas_total} vagas (ate ${partida.vagas_goleiro} de gol).`,
+      `Lista aberta! ${partida.vagas_total} vagas de linha.`,
+      '🧤 Os 2 goleiros são contratados por fora, não entram na lista.',
       '',
       'Responda na enquete abaixo 👇',
     ].join('\n'),
@@ -71,18 +76,25 @@ export async function publicarEnquete(
     data_jogo: string;
     vagas_total: number;
     vagas_goleiro: number;
+    enquete_id?: string | null;
   },
 ): Promise<void> {
   if (!config.GROUP_JID) return;
 
+  // Idempotencia: uma partida tem UMA enquete. Publicar de novo criaria uma
+  // segunda no grupo e sobrescreveria o enquete_id - a primeira continuaria
+  // visivel e pararia de funcionar em silencio, com os votos dela ignorados.
+  if (partida.enquete_id) {
+    log.info(
+      { partida: partida.data_jogo, enqueteId: partida.enquete_id },
+      'enquete ja publicada para esta partida, nao republico',
+    );
+    return;
+  }
+
   const enquete = await sendPoll(
     config.GROUP_JID,
-    tituloDaEnquete({
-      nome: config.RACHA_NOME,
-      local: config.RACHA_LOCAL,
-      rotuloData: rotuloData(partida.data_jogo),
-      horario: config.RACHA_HORARIO,
-    }),
+    tituloDaEnquete(partida.vagas_total),
     OPCOES,
   ).catch((err) => {
     log.warn({ err }, 'falha ao publicar a enquete');
@@ -92,7 +104,7 @@ export async function publicarEnquete(
   if (!enquete) {
     await anunciar(
       log,
-      'Nao consegui publicar a enquete desta semana. Confirme no meu privado.',
+      'Não consegui publicar a enquete desta semana. Me chame no privado para confirmar.',
     );
     return;
   }
@@ -104,6 +116,17 @@ export async function publicarEnquete(
 /** Quarta 12:00 — cria a partida do sabado e abre para os fixos. */
 async function abrirParaFixos(log: Log): Promise<void> {
   const partida = await garantirPartida();
+
+  // Mesma protecao da enquete: se a partida ja tem enquete, a abertura ja foi
+  // anunciada. Repetir encheria o grupo com dois anuncios iguais.
+  if (partida.enquete_id) {
+    log.info(
+      { partida: partida.data_jogo },
+      'abertura ja anunciada para esta partida, nada a fazer',
+    );
+    return;
+  }
+
   log.info({ partida: partida.data_jogo }, 'lista aberta para fixos');
   await anunciarAberturaFixos(log, partida);
   await publicarEnquete(log, partida);
@@ -119,7 +142,8 @@ async function abrirParaConvidados(log: Log): Promise<void> {
     log,
     [
       '👥 Convidados liberados!',
-      'Quem ja confirmou pode trazer alguem.',
+      'Quem já confirmou pode trazer alguém — é só marcar',
+      '"Vou com convidado" na enquete que eu chamo no privado.',
       '',
       formatarLista(partida, itens, config.RACHA_NOME),
     ].join('\n'),
@@ -142,9 +166,38 @@ async function fecharLista(log: Log): Promise<void> {
   await anunciar(
     log,
     [
-      '🏁 Lista fechada, bola em jogo!',
+      '🏁 Lista fechada! Bola em jogo às ' + config.RACHA_HORARIO.split(' ')[0] + '.',
       '',
       formatarLista(partida, itens, config.RACHA_NOME),
+    ].join('\n'),
+  );
+}
+
+/**
+ * Quarta a sexta, 19:00 — o resumo do dia.
+ *
+ * E o coracao do modelo de notificacao: durante o dia o bot fica calado
+ * enquanto o pessoal confirma, e uma vez por dia mostra como ficou. Sem isso, a
+ * lista era republicada a cada confirmacao e o grupo virava mural de bot.
+ */
+export async function digestDoDia(log: Log): Promise<void> {
+  const partida = await partidaAtual();
+  if (!partida) return;
+
+  const itens = await listar(partida.id);
+  const vagas = contarVagas(itens, partida.vagas_total);
+  const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
+
+  log.info({ ocupadas: vagas.ocupadas }, 'digest do dia');
+  await anunciar(
+    log,
+    [
+      `📋 Como está a lista para ${rotuloData(partida.data_jogo)}:`,
+      '',
+      formatarLista(partida, itens, config.RACHA_NOME),
+      ...(alertas.length ? ['', ...alertas] : []),
+      '',
+      'Para entrar ou sair, responda na enquete do racha 👆',
     ].join('\n'),
   );
 }
@@ -160,36 +213,22 @@ async function chamadaDeSexta(log: Log): Promise<void> {
   if (!partida) return;
 
   const itens = await listar(partida.id);
-  const vagas = contarVagas(itens, partida.vagas_total, partida.vagas_goleiro);
-  const faltaGente = vagas.ocupadas < config.MIN_JOGADORES;
-  const faltaGoleiro = vagas.gol.ocupadas < config.MIN_GOLEIROS;
-  if (!faltaGente && !faltaGoleiro) {
+  const vagas = contarVagas(itens, partida.vagas_total);
+  if (vagas.ocupadas >= config.MIN_JOGADORES) {
     log.info({ ocupadas: vagas.ocupadas }, 'time fechado, sem chamada de sexta');
     return;
   }
 
-  const pedidos: string[] = [];
-  if (faltaGente) {
-    pedidos.push(
-      `Faltam ${config.MIN_JOGADORES - vagas.ocupadas} para o minimo de ${config.MIN_JOGADORES}.`,
-    );
-  }
-  if (faltaGoleiro) {
-    pedidos.push(
-      vagas.gol.ocupadas === 0
-        ? 'Nao temos NENHUM goleiro ainda 🧤'
-        : `Falta ${config.MIN_GOLEIROS - vagas.gol.ocupadas} goleiro 🧤`,
-    );
-  }
-
-  log.info({ ocupadas: vagas.ocupadas, gol: vagas.gol.ocupadas }, 'chamada de sexta');
+  const faltam = config.MIN_JOGADORES - vagas.ocupadas;
+  log.info({ ocupadas: vagas.ocupadas }, 'chamada de sexta');
   await anunciar(
     log,
     [
-      '📣 Amanha tem racha e o time ainda nao fechou!',
-      ...pedidos,
+      '📣 Amanhã tem racha e o time ainda não fechou!',
+      `Temos ${vagas.ocupadas} na linha e o mínimo é ${config.MIN_JOGADORES} (6 de cada lado).`,
+      `Faltam ${faltam} ${faltam === 1 ? 'jogador' : 'jogadores'}.`,
       '',
-      'Quem ainda nao respondeu, responde na enquete la em cima 👆',
+      'Quem ainda não respondeu, responde na enquete do racha 👆',
       '',
       formatarLista(partida, itens, config.RACHA_NOME),
     ].join('\n'),
@@ -197,23 +236,30 @@ async function chamadaDeSexta(log: Log): Promise<void> {
 }
 
 /**
- * Sabado 12:00 — o jogo acabou. Encerra a semana e avisa que a enquete daquela
- * semana morreu, para ninguem votar nela achando que vale para a proxima.
+ * Rede de seguranca: garante que a partida da semana exista.
+ *
+ * `garantirPartida` so era chamado no cron de quarta 12:00. Se o container
+ * estivesse parado naquele minuto - deploy, reboot, queda - a semana inteira
+ * morria em silencio: nenhuma enquete, digest calado, e quem tentasse
+ * confirmar ouvia "nenhum racha aberto". Sem recuperacao ate a quarta seguinte.
+ *
+ * Roda de hora em hora e so age depois que a janela de abertura ja passou. Se a
+ * abertura ja tiver sido anunciada, `abrirParaFixos` nao faz nada - a guarda de
+ * idempotencia da enquete cobre isso.
  */
-async function encerrarSemana(log: Log): Promise<void> {
-  const partida = await partidaAEncerrar();
-  if (!partida) return;
+async function recuperarAberturaPerdida(log: Log): Promise<void> {
+  const dataJogo = proximoSabado(new Date());
+  const { abreFixos } = janelas(dataJogo);
+  if (new Date() < abreFixos) return; // ainda nao era para ter aberto
 
-  await marcarEncerrada(partida.id);
-  log.info({ partida: partida.data_jogo }, 'semana encerrada');
-  await anunciar(
-    log,
-    [
-      `🔚 ${config.RACHA_NOME} de ${rotuloData(partida.data_jogo)} encerrado. Ate semana que vem!`,
-      '',
-      'A enquete acima nao vale mais — na quarta eu publico a nova.',
-    ].join('\n'),
+  const partida = await partidaAtual();
+  if (partida?.enquete_id) return; // ja abriu, tudo certo
+
+  log.warn(
+    { dataJogo },
+    'abertura da semana nao aconteceu no horario - recuperando agora',
   );
+  await abrirParaFixos(log);
 }
 
 export function iniciarAgendador(log: Log): void {
@@ -225,8 +271,8 @@ export function iniciarAgendador(log: Log): void {
       () => abrirParaConvidados(log),
     ],
     ['fecha', config.CRON_FECHA, () => fecharLista(log)],
+    ['digest', config.CRON_DIGEST, () => digestDoDia(log)],
     ['chamada', config.CRON_CHAMADA, () => chamadaDeSexta(log)],
-    ['encerra', config.CRON_ENCERRA, () => encerrarSemana(log)],
   ];
 
   for (const [nome, expressao, fn] of tarefas) {
@@ -250,12 +296,18 @@ export function iniciarAgendador(log: Log): void {
     fecharVencidas().catch((err) =>
       log.warn({ err }, 'falha ao fechar partidas vencidas'),
     );
+    recuperarAberturaPerdida(log).catch((err) =>
+      log.warn({ err }, 'falha ao recuperar abertura perdida'),
+    );
   });
 
   // E no boot, para nao esperar ate a proxima hora cheia depois de um deploy.
+  // E justamente no boot que a recuperacao mais importa: se o container passou
+  // a quarta ao meio-dia fora do ar, ele volta e conserta sozinho.
   fecharVencidas()
     .then((n) => {
       if (n > 0) log.info({ partidas: n }, 'partidas vencidas fechadas no boot');
+      return recuperarAberturaPerdida(log);
     })
-    .catch((err) => log.warn({ err }, 'falha ao fechar partidas no boot'));
+    .catch((err) => log.warn({ err }, 'falha na faxina de boot'));
 }

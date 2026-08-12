@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
-import { query, transaction } from '../db.js';
+import { query, queryOne, transaction } from '../db.js';
+import { motivoDaRecusa } from './lista.js';
 import { erro, ok } from './tipos.js';
 import type { ItemLista, Partida, Posicao, Resultado } from './tipos.js';
 
@@ -72,22 +73,6 @@ async function contarComLock(
   };
 }
 
-function recusa(
-  contagem: { total: number; gols: number },
-  partida: Partida,
-  posicao: Posicao,
-  quantas: number,
-): string | undefined {
-  if (contagem.total + quantas > partida.vagas_total) {
-    return contagem.total >= partida.vagas_total
-      ? 'A lista ja esta completa.'
-      : `So resta${partida.vagas_total - contagem.total === 1 ? '' : 'm'} ${partida.vagas_total - contagem.total} vaga(s).`;
-  }
-  if (posicao === 'gol' && contagem.gols + quantas > partida.vagas_goleiro) {
-    return `As ${partida.vagas_goleiro} vagas de goleiro ja estao ocupadas.`;
-  }
-  return undefined;
-}
 
 export interface Confirmacao {
   readonly posicao: Posicao;
@@ -131,7 +116,7 @@ export async function confirmarFixo(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = recusa(contagem, partida, posicao, 1);
+    const motivo = motivoDaRecusa(contagem.total, partida, 1);
     if (motivo) return erro<Confirmacao>(motivo);
 
     await client.query(
@@ -168,7 +153,7 @@ export async function desistir(
     );
     const minhaPosicao = eu.rows[0]?.posicao;
     if (!minhaPosicao) {
-      return erro<Desistencia>('Voce nao estava na lista.');
+      return erro<Desistencia>('Você não estava na lista.');
     }
 
     // Saem junto por padrao: e o desfecho mais provavel, e libera vaga na
@@ -214,13 +199,13 @@ export async function adicionarConvidado(
       );
       if (anfitriao.rowCount === 0) {
         return erro<ItemLista>(
-          'Confirme sua presenca antes de trazer convidado.',
+          'Confirme sua presença antes de trazer convidado.',
         );
       }
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = recusa(contagem, partida, posicao, 1);
+    const motivo = motivoDaRecusa(contagem.total, partida, 1);
     if (motivo) return erro<ItemLista>(motivo);
 
     const { rows } = await client.query<{ id: number }>(
@@ -240,45 +225,70 @@ export async function adicionarConvidado(
   });
 }
 
+/** Como o pedido de remocao terminou, para quem chama montar a resposta. */
+export type Remocao =
+  | { readonly tipo: 'removido'; readonly nome: string }
+  | { readonly tipo: 'sem_convidados' }
+  | { readonly tipo: 'nao_encontrado'; readonly seus: readonly string[] }
+  | { readonly tipo: 'ambiguo'; readonly nome: string; readonly quantos: number };
+
 /**
- * Remove o N-esimo convidado do jogador (1-based), na mesma ordem que o bot
- * mostra. Por numero e nao por nome: dois convidados podem se chamar "Joao".
+ * Remove um convidado pelo NOME.
+ *
+ * Por nome, e nao por posicao numa lista numerada: a lista numerada existia so
+ * para resolver nomes repetidos - um caso raro - e cobrava 4 mensagens de
+ * todo mundo, sempre. Aqui o caso raro paga o proprio custo (o bot pede o nome
+ * completo) e o caso comum resolve em uma mensagem.
+ *
+ * So mexe nos convidados de quem pediu: ninguem tira convidado alheio.
  */
 export async function removerConvidado(
   partida: Partida,
   anfitriaoId: number,
-  indice: number,
-): Promise<Resultado<{ nome: string; posicao: Posicao }>> {
+  nome: string,
+): Promise<Remocao> {
   return transaction(async (client) => {
-    const { rows } = await client.query<{
-      id: number;
-      convidado_nome: string;
-      posicao: Posicao;
-    }>(
-      `select id, convidado_nome, posicao from inscricao
+    const { rows } = await client.query<{ id: number; convidado_nome: string }>(
+      `select id, convidado_nome from inscricao
         where partida_id = $1 and convidado_de_id = $2 and removido_em is null
         order by criado_em, id`,
       [partida.id, anfitriaoId],
     );
 
-    if (!rows.length) {
-      return erro<{ nome: string; posicao: Posicao }>(
-        'Voce nao tem convidados nesta lista.',
-      );
+    if (!rows.length) return { tipo: 'sem_convidados' };
+
+    const alvo = normalizarNome(nome);
+    const casam = rows.filter((r) => normalizarNome(r.convidado_nome) === alvo);
+
+    if (!casam.length) {
+      return {
+        tipo: 'nao_encontrado',
+        seus: rows.map((r) => r.convidado_nome),
+      };
     }
-    const alvo = rows[indice - 1];
-    if (!alvo) {
-      return erro<{ nome: string; posicao: Posicao }>(
-        `Voce tem ${rows.length} convidado(s). Escolha um numero entre 1 e ${rows.length}.`,
-      );
+    if (casam.length > 1) {
+      return {
+        tipo: 'ambiguo',
+        nome: casam[0]?.convidado_nome ?? nome,
+        quantos: casam.length,
+      };
     }
 
-    await client.query(
-      'update inscricao set removido_em = now() where id = $1',
-      [alvo.id],
-    );
-    return ok({ nome: alvo.convidado_nome, posicao: alvo.posicao });
+    const unico = casam[0]!;
+    await client.query('update inscricao set removido_em = now() where id = $1', [
+      unico.id,
+    ]);
+    return { tipo: 'removido', nome: unico.convidado_nome };
   });
+}
+
+/** Compara nome sem depender de acento nem de caixa: "joao" acha "João". */
+function normalizarNome(n: string): string {
+  return n
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 }
 
 /**
@@ -304,12 +314,12 @@ export async function restaurarInscricao(
     const alvo = rows[0];
     if (!alvo) {
       return erro<{ nome: string; posicao: Posicao }>(
-        'Essa inscricao nao existe mais.',
+        'Essa inscrição não existe mais.',
       );
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = recusa(contagem, partida, alvo.posicao, 1);
+    const motivo = motivoDaRecusa(contagem.total, partida, 1);
     if (motivo) return erro<{ nome: string; posicao: Posicao }>(motivo);
 
     await client.query(
@@ -319,3 +329,5 @@ export async function restaurarInscricao(
     return ok({ nome: alvo.convidado_nome ?? '?', posicao: alvo.posicao });
   });
 }
+
+

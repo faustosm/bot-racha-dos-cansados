@@ -28,9 +28,8 @@ export type AcaoDoVoto =
 /**
  * Traduz a opcao votada em acao de dominio.
  *
- * Nao ha opcao de goleiro na enquete de proposito: goleiro no racha e quase
- * sempre convidado de fora, e o fluxo de convidado ja pergunta linha ou gol
- * para cada um. Fixo que queira ir no gol manda "vou de gol" no privado.
+ * Nao ha opcao de goleiro porque goleiro nao existe para o bot: os 2 sao
+ * contratados por fora e nao ocupam vaga. A lista e so de linha.
  */
 export function interpretar(opcao: string): AcaoDoVoto | undefined {
   switch (opcao) {
@@ -51,17 +50,12 @@ export function interpretar(opcao: string): AcaoDoVoto | undefined {
  * Ao contrario do texto das OPCOES, o titulo nao entra no hash do voto: mudar
  * aqui e seguro e nao quebra enquete nenhuma.
  *
- * Curto de proposito - o endereco completo vai no anuncio logo acima, que nao
- * tem limite de tamanho nem risco de corte na lista de conversas.
+ * Curto de proposito - nome, data, local e endereco ja saem no anuncio logo
+ * acima. Repetir tudo aqui so faz a enquete ficar comprida sem ajudar; o que
+ * importa neste titulo e o convite pro voto e quantas vagas de linha tem.
  */
-export function tituloDaEnquete(id: {
-  nome: string;
-  local: string;
-  rotuloData: string;
-  horario: string;
-}): string {
-  const onde = id.local ? ` · ${id.local}` : '';
-  return `⚽ ${id.nome}${onde} — ${id.rotuloData}, ${id.horario}`;
+export function tituloDaEnquete(vagas: number): string {
+  return `⚽ Vote aí! ${vagas} vagas de linha`;
 }
 
 // --------------------------------------------------------------------------
@@ -69,28 +63,40 @@ export function tituloDaEnquete(id: {
 // --------------------------------------------------------------------------
 
 /**
- * Registra a opcao votada e devolve a anterior.
+ * A ultima opcao votada por essa pessoa nesta partida.
  *
  * O bot decide o que anunciar comparando OPCAO com OPCAO, nao o estado da
  * lista: trocar "Vou" por "Vou com convidado" nao muda a vaga, mas muda o
  * recado - e o grupo precisa ver.
  */
+export async function votoAnterior(
+  partidaId: number,
+  jogadorId: number,
+): Promise<string | undefined> {
+  const r = await queryOne<{ opcao: string }>(
+    'select opcao from voto where partida_id = $1 and jogador_id = $2',
+    [partidaId, jogadorId],
+  );
+  return r?.opcao;
+}
+
+/**
+ * Registra a opcao votada.
+ *
+ * Separado da leitura de proposito: so deve ser chamado DEPOIS de a acao ter
+ * sucesso. Registrar uma tentativa que falhou (lista cheia, por exemplo) faz a
+ * proxima tentativa identica ser silenciada pelo dedupe, e a pessoa nunca
+ * entra quando a vaga abre.
+ */
 export async function registrarVoto(
   partidaId: number,
   jogadorId: number,
   opcao: string,
-): Promise<string | undefined> {
-  const anterior = await queryOne<{ opcao: string }>(
-    'select opcao from voto where partida_id = $1 and jogador_id = $2',
-    [partidaId, jogadorId],
-  );
-
+): Promise<void> {
   await query(
     `insert into voto (partida_id, jogador_id, opcao) values ($1, $2, $3)
      on conflict (partida_id, jogador_id) do update
        set opcao = excluded.opcao, atualizado_em = now()`,
     [partidaId, jogadorId, opcao],
   );
-
-  return anterior?.opcao;
 }

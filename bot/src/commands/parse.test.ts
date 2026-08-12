@@ -23,15 +23,15 @@ describe('parse - confirmar', () => {
     'presente',
   ]) {
     it(`"${t}" confirma na linha`, () => {
-      assert.deepEqual(parse(t), { tipo: 'confirmar', posicao: 'linha' });
+      assert.deepEqual(parse(t), { tipo: 'confirmar' });
     });
   }
 
-  for (const t of ['vou de gol', 'vou no gol', 'eu vou de goleiro']) {
-    it(`"${t}" confirma no gol`, () => {
-      assert.deepEqual(parse(t), { tipo: 'confirmar', posicao: 'gol' });
-    });
-  }
+  it('"vou de gol" tambem so confirma presenca', () => {
+    // Goleiro saiu do bot: os 2 sao contratados por fora e nao ocupam vaga.
+    // A frase continua valendo como confirmacao para nao quebrar quem digita.
+    assert.deepEqual(parse('vou de gol'), { tipo: 'confirmar' });
+  });
 });
 
 describe('parse - desistir', () => {
@@ -79,31 +79,7 @@ describe('parse - palavras de controle do dialogo', () => {
     // comecar com "vou". Quem escreve isso quer trazer alguem, e o bot
     // pergunta quem. Confirmar presenca continua sendo "vou".
     assert.deepEqual(parse('vou levar'), { tipo: 'quero_convidar' });
-    assert.deepEqual(parse('vou'), { tipo: 'confirmar', posicao: 'linha' });
-  });
-});
-
-describe('parse - opt-out de mensagem do bot', () => {
-  for (const t of [
-    'não me chame',
-    'nao me chame mais',
-    'para de me chamar',
-    'não quero mensagem',
-    'me deixa em paz',
-  ]) {
-    it(`"${t}" desliga as mensagens do bot`, () => {
-      assert.deepEqual(parse(t), { tipo: 'nao_perturbe' });
-    });
-  }
-
-  it('"não me chame" NAO pode virar desistencia', () => {
-    // Comeca com "nao", e "nao vou"/"nao" saem da lista. Se a ordem de
-    // checagem inverter, quem so queria silencio sai do racha.
-    assert.notDeepEqual(parse('nao me chame'), { tipo: 'desistir' });
-  });
-
-  it('"pode me chamar" religa', () => {
-    assert.deepEqual(parse('pode me chamar'), { tipo: 'pode_perturbar' });
+    assert.deepEqual(parse('vou'), { tipo: 'confirmar' });
   });
 });
 
@@ -125,13 +101,6 @@ describe('parse - cancelar NAO e desistir', () => {
 });
 
 describe('parse - convidados', () => {
-  it('aceita + com varios nomes', () => {
-    assert.deepEqual(parse('+João, Pedro e Marcelo'), {
-      tipo: 'convidados',
-      nomes: ['João', 'Pedro', 'Marcelo'],
-    });
-  });
-
   it('preserva acento e caixa do nome', () => {
     assert.deepEqual(parse('convidado José'), {
       tipo: 'convidados',
@@ -175,43 +144,7 @@ describe('parse - convite em linguagem natural', () => {
   });
 
   it('nao rouba a confirmacao de presenca simples', () => {
-    assert.deepEqual(parse('vou'), { tipo: 'confirmar', posicao: 'linha' });
-    assert.deepEqual(parse('vou de gol'), {
-      tipo: 'confirmar',
-      posicao: 'gol',
-    });
-  });
-});
-
-describe('parse - tirar', () => {
-  it('aceita "tirar 2" e "-2"', () => {
-    assert.deepEqual(parse('tirar 2'), { tipo: 'tirar', indice: 2 });
-    assert.deepEqual(parse('-2'), { tipo: 'tirar', indice: 2 });
-  });
-
-  for (const t of [
-    'tirar',
-    'tirar convidado',
-    'Quero remover um convidado',
-    'Quero tirar um convidado',
-    'quero tira um convidado',
-    'preciso remover uma pessoa',
-    'retirar convidado',
-    'excluir um convidado',
-  ]) {
-    it(`"${t}" pede a lista numerada, sem indice`, () => {
-      assert.deepEqual(parse(t), { tipo: 'tirar' });
-    });
-  }
-
-  it('com nome tambem mostra a lista, nao remove direto', () => {
-    // Dois convidados podem se chamar Joao: remover por nome nao tem
-    // resposta unica, entao o bot pergunta pelo numero.
-    assert.deepEqual(parse('tirar o João'), { tipo: 'tirar' });
-  });
-
-  it('"cancelar" nao e remocao', () => {
-    assert.deepEqual(parse('cancelar'), { tipo: 'cancelar' });
+    assert.deepEqual(parse('vou'), { tipo: 'confirmar' });
   });
 });
 
@@ -221,19 +154,6 @@ describe('parse - escolha numa lista', () => {
     assert.deepEqual(parse('1, 2'), { tipo: 'numeros', numeros: [1, 2] });
     assert.deepEqual(parse('1 e 3'), { tipo: 'numeros', numeros: [1, 3] });
     assert.deepEqual(parse('todos'), { tipo: 'todos' });
-  });
-});
-
-describe('parse - posicao no dialogo', () => {
-  it('"linha" e "gol" respondem a pergunta', () => {
-    assert.deepEqual(parse('linha'), { tipo: 'posicao', posicao: 'linha' });
-    assert.deepEqual(parse('gol'), { tipo: 'posicao', posicao: 'gol' });
-  });
-
-  it('numero NAO e atalho de posicao', () => {
-    // "1" agora significa escolha numa lista numerada. Se voltasse a ser
-    // "linha", escolher convidado para remover viraria ambiguidade.
-    assert.deepEqual(parse('1'), { tipo: 'numeros', numeros: [1] });
   });
 });
 
@@ -294,5 +214,26 @@ describe('separarNomes', () => {
       'Carlos',
       'Duda',
     ]);
+  });
+});
+
+describe('parse - tirar convidado pelo nome', () => {
+  for (const [texto, nome] of [
+    ['João não vai mais', 'João'],
+    ['tirar o João', 'João'],
+    ['remover João', 'João'],
+    ['quero tirar o João Silva', 'João Silva'],
+    ['o Pedro não vai', 'Pedro'],
+  ] as const) {
+    it(`"${texto}" tira ${nome}`, () => {
+      assert.deepEqual(parse(texto), { tipo: 'tirar_convidado', nome });
+    });
+  }
+
+  it('NAO confunde com a propria desistencia', () => {
+    // "nao vou mais" e a pessoa saindo; "Joao nao vai mais" e o convidado.
+    // Se a ordem de checagem inverter, quem quer sair tira um convidado.
+    assert.deepEqual(parse('não vou mais'), { tipo: 'desistir' });
+    assert.deepEqual(parse('fora'), { tipo: 'desistir' });
   });
 });

@@ -22,8 +22,6 @@ export interface Jogador {
   readonly telefone: string | null;
   /** Como a pessoa aparece na lista: o nome escolhido, ou o pushName. */
   readonly nome: string;
-  /** Ja perguntamos se o nome esta certo? */
-  readonly nomeConfirmado: boolean;
   /**
    * A pessoa ja escreveu para o bot no privado?
    *
@@ -32,8 +30,6 @@ export interface Jogador {
    * com desconhecido, que e o que derruba o numero.
    */
   readonly falouNoPrivado: boolean;
-  /** Pediu para o bot nao iniciar conversa. Respostas continuam valendo. */
-  readonly naoPerturbe: boolean;
 }
 
 interface LinhaJogador {
@@ -59,9 +55,7 @@ const paraJogador = (r: LinhaJogador): Jogador => ({
   lid: r.lid,
   telefone: r.telefone,
   nome: r.nome,
-  nomeConfirmado: r.nome_confirmado,
   falouNoPrivado: r.falou_no_privado,
-  naoPerturbe: r.nao_perturbe,
 });
 
 /**
@@ -162,37 +156,5 @@ export async function resolver(id: Identidade): Promise<Jogador> {
   });
 }
 
-/** Marca que o nome ja foi conferido com a pessoa. */
-export async function confirmarNome(jogadorId: number): Promise<void> {
-  await query('update jogador set nome_confirmado = true where id = $1', [
-    jogadorId,
-  ]);
-}
 
-/** Define como a pessoa quer aparecer na lista. Vence o pushName para sempre. */
-export async function definirNomeEscolhido(
-  jogadorId: number,
-  nome: string,
-): Promise<void> {
-  await query(
-    `update jogador set nome_escolhido = $2, nome_confirmado = true
-      where id = $1`,
-    [jogadorId, nome],
-  );
-}
 
-/**
- * Liga/desliga o silencio pedido pela pessoa.
- *
- * Nao afeta resposta: se ela escrever, o bot responde. Afeta apenas conversa
- * que o BOT inicia - a pergunta de convidado depois da reacao, por exemplo.
- */
-export async function definirNaoPerturbe(
-  jogadorId: number,
-  valor: boolean,
-): Promise<void> {
-  await query('update jogador set nao_perturbe = $2 where id = $1', [
-    jogadorId,
-    valor,
-  ]);
-}

@@ -7,50 +7,51 @@ export interface Vagas {
   readonly ocupadas: number;
   readonly total: number;
   readonly livres: number;
-  readonly gol: { readonly ocupadas: number; readonly livres: number };
-  readonly linha: { readonly ocupadas: number };
 }
 
+/**
+ * A lista e so de jogadores de linha.
+ *
+ * Os 2 goleiros sao contratados por fora e o bot nao os controla: nao ocupam
+ * vaga, nao entram na contagem e nao aparecem na lista. A lista fecha em 18.
+ */
 export function contarVagas(
   itens: readonly ItemLista[],
   vagasTotal: number,
-  vagasGoleiro: number,
 ): Vagas {
-  const gol = itens.filter((i) => i.posicao === 'gol').length;
-  const linha = itens.length - gol;
   return {
     ocupadas: itens.length,
     total: vagasTotal,
     livres: Math.max(0, vagasTotal - itens.length),
-    gol: { ocupadas: gol, livres: Math.max(0, vagasGoleiro - gol) },
-    linha: { ocupadas: linha },
   };
 }
 
-/**
- * Ha vaga para mais alguem nesta posicao?
- *
- * O teto de goleiros e maximo, nao cota reservada: com 1 goleiro inscrito,
- * as 19 vagas restantes podem ser todas de linha.
- */
-export function cabeMais(
-  vagas: Vagas,
-  posicao: Posicao,
-  vagasGoleiro: number,
-): boolean {
-  if (vagas.ocupadas >= vagas.total) return false;
-  if (posicao === 'gol' && vagas.gol.ocupadas >= vagasGoleiro) return false;
-  return true;
+/** Ha vaga para mais alguem? */
+export function cabeMais(vagas: Vagas): boolean {
+  return vagas.livres > 0;
+}
+
+/** Por que essa pessoa nao pode entrar, se nao puder. */
+export function motivoDaRecusa(
+  ocupadas: number,
+  partida: Pick<Partida, 'vagas_total'>,
+  quantas: number,
+): string | undefined {
+  const livres = partida.vagas_total - ocupadas;
+  if (quantas <= livres) return undefined;
+  return livres <= 0
+    ? `A lista está completa (${partida.vagas_total} jogadores de linha).`
+    : `Só resta${livres === 1 ? '' : 'm'} ${livres} vaga${livres === 1 ? '' : 's'}.`;
 }
 
 const DIAS = [
   'domingo',
   'segunda',
-  'terca',
+  'terça',
   'quarta',
   'quinta',
   'sexta',
-  'sabado',
+  'sábado',
 ] as const;
 
 /** "2026-08-08" -> "sabado 08/08". Trata a data como calendario, sem fuso. */
@@ -85,8 +86,7 @@ function linhaItem(
       : anfitriaoSaiu
         ? `convidado (${item.convidadoDe ?? '?'} saiu)`
         : `convidado de ${item.convidadoDe ?? '?'}`;
-  const posicao = item.posicao === 'gol' ? 'gol 🧤' : 'linha';
-  return `${String(indice).padStart(2, ' ')}. ${item.nome} — ${origem} · ${posicao}`;
+  return `${String(indice).padStart(2, ' ')}. ${item.nome} — ${origem}`;
 }
 
 /**
@@ -98,11 +98,11 @@ function linhaItem(
  * paralelas destruiriam essa leitura.
  */
 export function formatarLista(
-  partida: Pick<Partida, 'data_jogo' | 'vagas_total' | 'vagas_goleiro'>,
+  partida: Pick<Partida, 'data_jogo' | 'vagas_total'>,
   itens: readonly ItemLista[],
   nomeDoRacha = 'Racha',
 ): string {
-  const vagas = contarVagas(itens, partida.vagas_total, partida.vagas_goleiro);
+  const vagas = contarVagas(itens, partida.vagas_total);
 
   const partes: string[] = [
     `⚽ ${nomeDoRacha} — ${rotuloData(partida.data_jogo)} · ${vagas.ocupadas}/${vagas.total}`,
@@ -118,45 +118,19 @@ export function formatarLista(
   partes.push(
     ...(itens.length
       ? itens.map((item, n) => linhaItem(n + 1, item, presentes))
-      : ['  ninguem confirmou ainda']),
+      : ['  ninguém confirmou ainda']),
   );
 
   partes.push(
     '',
-    `gol ${vagas.gol.ocupadas}/${partida.vagas_goleiro} · ${resumoVagas(vagas)}`,
+    // Duas frases separadas, de proposito: "X/18 · goleiros por fora" numa
+    // linha so deixava parecer que os goleiros contam dentro do X/18. Precisa
+    // ficar claro que sao dois times diferentes de gente, ou membros com mais
+    // dificuldade de leitura entendem que a lista inclui goleiro.
+    `${vagas.ocupadas}/${vagas.total} de linha.`,
+    'Os 2 goleiros são contratados à parte — não entram nesse número.',
   );
   return partes.join('\n');
-}
-
-export function resumoVagas(vagas: Vagas): string {
-  if (vagas.livres === 0) return 'Lista completa 🔒';
-  const plural = vagas.livres === 1 ? 'vaga' : 'vagas';
-  const gol =
-    vagas.gol.livres > 0
-      ? ` (${vagas.gol.livres} de gol)`
-      : ' (gol completo)';
-  return `${vagas.livres} ${plural}${gol}`;
-}
-
-/** Convidados de um jogador, numerados — a referencia do comando "tirar N". */
-export function formatarConvidadosDe(
-  itens: readonly ItemLista[],
-  jogadorId: number,
-): string {
-  const meus = itens.filter((i) => i.convidadoDeId === jogadorId);
-  if (!meus.length) return 'Voce nao tem convidados nesta lista.';
-  const linhas = meus.map(
-    (i, n) => `${n + 1}. ${i.nome} (${i.posicao === 'gol' ? 'gol' : 'linha'})`,
-  );
-  return ['Seus convidados:', ...linhas].join('\n');
-}
-
-/** Os convidados de um jogador, na ordem que "tirar N" usa. */
-export function convidadosDe(
-  itens: readonly ItemLista[],
-  jogadorId: number,
-): readonly ItemLista[] {
-  return itens.filter((i) => i.convidadoDeId === jogadorId);
 }
 
 /**
@@ -171,11 +145,11 @@ export function convidadosDe(
  */
 export function alertasDeVagas(vagas: Vagas, limiar: number): string[] {
   if (vagas.livres === 0) {
-    return [`🔒 RACHA COMPLETO! ${vagas.ocupadas}/${vagas.total}`];
+    return [`🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha.`];
   }
   if (vagas.livres <= limiar) {
     return [
-      `🔥 Corre! ${vagas.livres === 1 ? 'Ultima vaga' : `Ultimas ${vagas.livres} vagas`}!`,
+      `🔥 Corre! ${vagas.livres === 1 ? 'Última vaga' : `Últimas ${vagas.livres} vagas`}!`,
     ];
   }
   return [];

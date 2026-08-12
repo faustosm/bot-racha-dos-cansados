@@ -1,12 +1,17 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { alertasDeVagas, contarVagas, formatarLista } from './lista.js';
+import {
+  alertasDeVagas,
+  contarVagas,
+  formatarLista,
+  motivoDaRecusa,
+} from './lista.js';
 import type { ItemLista } from './tipos.js';
 
 // Regressoes da revisao de 01/08/2026. Cada teste aqui existe porque o
 // comportamento ja esteve errado.
 
-const partida = { data_jogo: '2026-08-08', vagas_total: 20, vagas_goleiro: 2 };
+const partida = { data_jogo: '2026-08-08', vagas_total: 18 };
 
 const fixoSimples = (id: number): ItemLista => ({
   id,
@@ -53,36 +58,55 @@ describe('convidado cujo anfitriao saiu', () => {
 });
 
 describe('alertasDeVagas', () => {
-  const vagas = (ocupadas: number, total: number) =>
-    contarVagas(
-      Array.from({ length: ocupadas }, (_, i) => fixoSimples(i)),
-      total,
-      2,
-    );
+  const vagas = (ocupadas: number) =>
+    contarVagas(Array.from({ length: ocupadas }, (_, i) => fixoSimples(i)), 18);
 
-  it('anuncia racha completo quando nao sobra vaga', () => {
-    assert.deepEqual(alertasDeVagas(vagas(20, 20), 2), [
-      '🔒 RACHA COMPLETO! 20/20',
+  it('anuncia lista completa aos 18 de linha', () => {
+    assert.deepEqual(alertasDeVagas(vagas(18), 2), [
+      '🔒 LISTA COMPLETA! 18/18 na linha.',
     ]);
   });
 
   it('avisa quando as vagas estao acabando', () => {
-    assert.deepEqual(alertasDeVagas(vagas(18, 20), 2), [
-      '🔥 Corre! Ultimas 2 vagas!',
-    ]);
-    assert.deepEqual(alertasDeVagas(vagas(19, 20), 2), [
-      '🔥 Corre! Ultima vaga!',
-    ]);
+    assert.deepEqual(alertasDeVagas(vagas(16), 2), ['🔥 Corre! Últimas 2 vagas!']);
+    assert.deepEqual(alertasDeVagas(vagas(17), 2), ['🔥 Corre! Última vaga!']);
   });
 
   it('fica calado com folga', () => {
-    assert.deepEqual(alertasDeVagas(vagas(10, 20), 2), []);
+    assert.deepEqual(alertasDeVagas(vagas(10), 2), []);
+  });
+});
+
+describe('motivoDaRecusa', () => {
+  const p = { vagas_total: 18 };
+
+  it('lista cheia recusa e diz que sao 18 de linha', () => {
+    const m = motivoDaRecusa(18, p, 1);
+    assert.match(m ?? '', /lista está completa/i);
+    assert.match(m ?? '', /18 jogadores de linha/i);
+    // Goleiro saiu do bot: a recusa nao pode mandar procurar vaga de gol.
+    assert.doesNotMatch(m ?? '', /goleiro/i);
   });
 
-  it('completo tem prioridade sobre "acabando"', () => {
-    // Com limiar 5 e 0 livres, as duas condicoes valem. So a mais forte sai.
-    assert.deepEqual(alertasDeVagas(vagas(20, 20), 5), [
-      '🔒 RACHA COMPLETO! 20/20',
-    ]);
+  it('com folga nao recusa ninguem', () => {
+    assert.equal(motivoDaRecusa(5, p, 1), undefined);
+  });
+
+  it('recusa quando faltam vagas para todos os convidados', () => {
+    assert.match(motivoDaRecusa(17, p, 2) ?? '', /Só resta 1 vaga/i);
+  });
+});
+
+describe('remoção de convidado por nome', () => {
+  // A comparação ignora acento e caixa: quem digita "joao" acha "João".
+  // Sem isso, a pessoa erraria por causa do teclado do celular.
+  it('normaliza acento e caixa ao comparar', () => {
+    const iguais = (a: string, b: string) =>
+      a.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim() ===
+      b.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+    assert.ok(iguais('joao', 'João'));
+    assert.ok(iguais('  JOÃO ', 'joão'));
+    assert.ok(!iguais('João', 'João Silva'));
   });
 });

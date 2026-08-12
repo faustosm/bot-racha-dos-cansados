@@ -7,7 +7,8 @@ export { isoDate, janelas, proximoSabado } from './datas.js';
 
 const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
                  vagas_total, vagas_goleiro, status,
-                 enquete_id, enquete_segredo, enquete_criador, encerrada_em`;
+                 enquete_id, enquete_segredo, enquete_criador, encerrada_em,
+                 lista_lotou_em`;
 
 /**
  * Cria a partida do proximo sabado se ainda nao existir. Idempotente: o
@@ -20,7 +21,7 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
   const criada = await queryOne<Partida>(
     `insert into partida
        (data_jogo, abre_fixos, abre_convidados, fecha_em, vagas_total, vagas_goleiro)
-     values ($1, $2, $3, $4, $5, $6)
+     values ($1, $2, $3, $4, $5, 0)
      on conflict (data_jogo) do nothing
      returning ${COLUNAS}`,
     [
@@ -29,7 +30,6 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
       abreConvidados,
       fechaEm,
       config.VAGAS_TOTAL,
-      config.VAGAS_GOLEIRO,
     ],
   );
   if (criada) return criada;
@@ -134,11 +134,27 @@ export async function marcarEncerrada(id: number): Promise<void> {
   await query('update partida set encerrada_em = now() where id = $1', [id]);
 }
 
+/** Marca o instante em que a lista bateu o total de vagas. So a 1a vez conta. */
+export async function marcarListaLotou(id: number): Promise<void> {
+  await query(
+    'update partida set lista_lotou_em = now() where id = $1 and lista_lotou_em is null',
+    [id],
+  );
+}
+
 export async function definirStatus(
   id: number,
   status: StatusPartida,
-): Promise<void> {
-  await query('update partida set status = $2 where id = $1', [id, status]);
+): Promise<boolean> {
+  // Condicional de proposito: com duas confirmacoes simultaneas, as duas leem
+  // status 'aberta' e as duas veem a lista cheia. Sem o `where status <> $2`,
+  // ambas anunciariam "RACHA COMPLETO". Assim so uma muda de fato, e quem
+  // chama usa o retorno para saber se foi ela.
+  const linhas = await query<{ id: number }>(
+    'update partida set status = $2 where id = $1 and status <> $2 returning id',
+    [id, status],
+  );
+  return linhas.length > 0;
 }
 
 /** Convidados so podem ser adicionados a partir de quinta 12:00. */

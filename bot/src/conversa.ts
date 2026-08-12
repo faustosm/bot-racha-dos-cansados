@@ -9,16 +9,6 @@ import type { Posicao } from './domain/tipos.js';
 export type Estado =
   /** Perguntou se vai levar convidados; espera nomes ou "nao". */
   | 'aguardando_nomes'
-  /** Perguntou se o convidado da vez e de linha ou gol. */
-  | 'aguardando_posicao'
-  /** Mostrou os convidados numerados; espera quais tirar. */
-  | 'aguardando_remocao'
-  /** Pediu confirmacao de uma remocao especifica; espera sim/nao. */
-  | 'confirmando_remocao'
-  /** Perguntou se o nome do WhatsApp esta certo; espera sim/nao. */
-  | 'confirmando_nome'
-  /** A pessoa disse que o nome esta errado; espera o nome certo. */
-  | 'aguardando_nome'
   /** A pessoa saiu e tinha convidados; espera saber quais continuam indo. */
   | 'convidados_orfaos';
 
@@ -32,10 +22,6 @@ export interface Candidato {
 }
 
 export interface DadosConversa {
-  /** Nomes ainda nao registrados, na ordem em que foram informados. */
-  readonly pendentes?: readonly string[];
-  /** Nomes ja registrados nesta rodada, para a mensagem final. */
-  readonly registrados?: readonly { nome: string; posicao: Posicao }[];
   /** Convidados oferecidos para remocao, na ordem mostrada. */
   readonly candidatos?: readonly Candidato[];
 }

@@ -122,6 +122,38 @@ export async function sendPoll(
   };
 }
 
+interface ParticipanteBruto {
+  id?: string;
+  phoneNumber?: string;
+}
+
+export interface Participante {
+  /** Identificador de grupo (@lid). */
+  readonly lid: string | undefined;
+  /** Telefone (@s.whatsapp.net). */
+  readonly telefone: string | undefined;
+}
+
+/**
+ * Membros do grupo, com os DOIS identificadores de cada um.
+ *
+ * E o que permite decidir se quem escreveu no privado - onde so chega o
+ * telefone - e do grupo, cuja lista usa @lid. Sem os dois, nao daria para
+ * casar sem a pessoa ter falado no grupo antes.
+ */
+export async function fetchGroupParticipants(
+  groupJid: string,
+): Promise<Participante[]> {
+  const r = await request<{ participants?: ParticipanteBruto[] }>(
+    `/group/participants/${config.EVOLUTION_INSTANCE}?groupJid=${encodeURIComponent(groupJid)}`,
+    { method: 'GET' },
+  );
+  return (r.participants ?? []).map((p) => ({
+    lid: p.id,
+    telefone: p.phoneNumber,
+  }));
+}
+
 /** Estado da conexao: "open" | "connecting" | "close". */
 export function connectionState() {
   return request<{ instance: { state: string } }>(

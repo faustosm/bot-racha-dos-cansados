@@ -11,32 +11,29 @@ import {
   removerConvidado,
   restaurarInscricao,
 } from './domain/inscricao.js';
-import {
-  confirmarNome,
-  definirNaoPerturbe,
-  definirNomeEscolhido,
-  resolver,
-} from './domain/jogador.js';
+import { resolver } from './domain/jogador.js';
 import {
   convidadosLiberados,
   definirStatus,
   listaAberta,
+  marcarListaLotou,
   partidaAtual,
   partidaParaLeitura,
   partidaPorEnquete,
   partidaPorId,
 } from './domain/partida.js';
-import { OPCOES, interpretar, registrarVoto } from './domain/enquete.js';
-import { decifrarVoto, opcoesEscolhidas } from './domain/voto.js';
 import {
-  alertasDeVagas,
-  contarVagas,
-  convidadosDe,
-  formatarConvidadosDe,
-  formatarLista,
-} from './domain/lista.js';
-import type { Partida, Posicao } from './domain/tipos.js';
+  OPCOES,
+  interpretar,
+  registrarVoto,
+  votoAnterior,
+} from './domain/enquete.js';
+import { decifrarVoto, opcoesEscolhidas } from './domain/voto.js';
+import type { Vagas } from './domain/lista.js';
+import { alertasDeVagas, contarVagas, formatarLista } from './domain/lista.js';
+import type { ItemLista, Partida } from './domain/tipos.js';
 import { comoFalarComOBot } from './link.js';
+import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
 
 export interface Contexto {
@@ -61,11 +58,8 @@ interface Sessao extends Contexto {
   readonly jogadorId: number;
   /** Nome que aparece na lista (escolhido pela pessoa, ou o pushName). */
   readonly nomeNaLista: string;
-  readonly nomeConfirmado: boolean;
   /** A pessoa ja escreveu para o bot alguma vez. */
   readonly falouNoPrivado: boolean;
-  /** Pediu para o bot nao iniciar conversa. */
-  readonly naoPerturbe: boolean;
 }
 
 /**
@@ -77,19 +71,16 @@ const COMANDOS_FORTES = new Set<Intencao['tipo']>([
   'ajuda',
   'desistir',
   'confirmar',
-  'meus_convidados',
-  'tirar',
   'quero_convidar',
-  'nao_perturbe',
-  'pode_perturbar',
+  'tirar_convidado',
 ]);
 
 const OPCOES_NOMES = [
-  'Nao entendi. Aqui eu espero uma destas coisas:',
+  'Não entendi. Aqui eu espero uma destas coisas:',
   '',
-  '  os nomes dos convidados, separados por virgula',
+  '  os nomes dos convidados, separados por vírgula',
   '    ex: Joao, Pedro',
-  '  "nao" (ou "nenhum") se nao for levar ninguem',
+  '  "não" (ou "nenhum") se não for levar ninguém',
 ].join('\n');
 
 /**
@@ -99,35 +90,29 @@ const OPCOES_NOMES = [
  *
  * Curto de proposito - lista completa em toda mensagem ninguem le.
  */
-const RODAPE =
-  '· vou · fora · vou levar convidado · quero tirar convidado · lista · ajuda ·';
+const RODAPE = '💬 "lista" · "ajuda"';
 
-// Escrito como frase, nao como sintaxe: o grupo e de gente comum, e "+nome"
-// ja se provou incompreensivel na pratica.
+// A enquete e o caminho principal desde que ela existe. A ajuda tem que
+// comecar por ela - antes ensinava a digitar comandos e nem citava a enquete,
+// entao quem pedia ajuda aprendia o caminho mais trabalhoso.
 const AJUDA = [
-  'É só falar comigo normalmente. Por exemplo:',
+  '⚽ Eu cuido da lista do racha.',
   '',
-  'ENTRAR',
-  '  "vou"  ou  "bora"  ou  "tô dentro"',
-  '  "vou de gol" — se for jogar no gol',
+  'ENTRAR OU SAIR — é só tocar na enquete do grupo:',
+  '  ✅ Vou',
+  '  👥 Vou com convidado',
+  '  ❌ Não vou',
   '',
-  'SAIR',
-  '  "fora"  ou  "não vou"',
-  '  (seus convidados saem junto)',
+  'TIRAR UM CONVIDADO',
+  '  Me manda aqui: "João não vai mais"',
   '',
-  'LEVAR CONVIDADO',
-  '  "vou levar um convidado" — eu pergunto quem',
-  '  "vou levar o João" — já anoto direto',
+  'A lista tem 18 vagas — todas de linha.',
+  'Os 2 goleiros são contratados por fora, não entram aqui.',
   '',
-  'TIRAR CONVIDADO',
-  '  "quero tirar um convidado" — eu mostro a lista e pergunto qual',
+  'AQUI NO PRIVADO você também pode:',
+  '  "lista" — ver a lista completa',
   '',
-  'VER',
-  '  "lista" — a lista completa',
-  '  "meus" — só os seus convidados',
-  '',
-  'Tudo isso aqui no privado. No grupo eu só publico a lista;',
-  'lá funcionam apenas "lista" e "ajuda".',
+  'No grupo eu publico a lista às 19:00 e sempre que alguém sai.',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -165,13 +150,6 @@ async function noPrivado(
  * o nome de quem vai junto. E o unico momento em que o bot escreve primeiro.
  */
 function puxarConversa(ctx: Sessao, texto: string): void {
-  if (ctx.naoPerturbe) {
-    ctx.log.info(
-      { jogadorId: ctx.jogadorId },
-      'pediu para nao ser chamado, conversa nao iniciada',
-    );
-    return;
-  }
   enfileirar(ctx.log, { para: ctx.jidPrivado, texto });
 }
 
@@ -193,24 +171,45 @@ async function avisarGrupo(ctx: Sessao, texto: string): Promise<void> {
  * grupo faz hoje na mao, e a ordem de confirmacao e a informacao que eles usam
  * para saber quem chegou primeiro. O custo e uma mensagem por mudanca.
  */
+/**
+ * Mantem o status da partida coerente com a ocupacao real, SEM mandar mensagem.
+ *
+ * Precisa rodar em toda mudanca, publicando ou nao: e o status que faz o bot
+ * recusar o 21o. Separado da publicacao porque o grupo so recebe mensagem fora
+ * de horario em dois casos - alguem saiu, ou a lista acabou de lotar.
+ *
+ * Devolve `lotouAgora` para quem chama saber se essa e uma das excecoes.
+ */
+async function sincronizarStatus(
+  partida: Partida,
+  itens: readonly ItemLista[],
+): Promise<{ lotouAgora: boolean; vagas: Vagas }> {
+  const vagas = contarVagas(itens, partida.vagas_total);
+
+  // `definirStatus` so devolve true para quem REALMENTE mudou o status. Numa
+  // corrida entre duas confirmacoes, uma so ganha - e so ela anuncia.
+  const lotouAgora =
+    vagas.livres === 0 ? await definirStatus(partida.id, 'cheia') : false;
+  if (lotouAgora) await marcarListaLotou(partida.id);
+
+  if (vagas.livres > 0) await definirStatus(partida.id, 'aberta');
+
+  return { lotouAgora, vagas };
+}
+
+/**
+ * Publica a lista no grupo.
+ *
+ * Chamar SO quando a mudanca merece interromper o grupo. Confirmacao nao
+ * merece: sao dezenas por semana, e a lista atualizada sai no digest das 19:00.
+ */
 async function publicarLista(
   ctx: Sessao,
   partida: Partida,
   cabecalho: string,
 ): Promise<void> {
   const itens = await listar(partida.id);
-  const vagas = contarVagas(itens, partida.vagas_total, partida.vagas_goleiro);
-
-  // Mantem o status coerente com a ocupacao real.
-  if (vagas.livres === 0 && partida.status !== 'cheia') {
-    await definirStatus(partida.id, 'cheia');
-  } else if (vagas.livres > 0 && partida.status === 'cheia') {
-    await definirStatus(partida.id, 'aberta');
-  }
-
-  // Alertas vao JUNTO da lista, nao como mensagem separada. Como a lista so e
-  // republicada quando algo muda, eles aparecem exatamente quando a contagem se
-  // move - sem cron e sem repetir a toa.
+  const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
 
   await avisarGrupo(
@@ -221,112 +220,88 @@ async function publicarLista(
       formatarLista(partida, itens, config.RACHA_NOME),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
-      // Repetido em toda publicacao de proposito: nunca se sabe se quem le e
-      // alguem novo no grupo ou alguem que esqueceu como funciona.
-      'Para entrar ou sair, responda na enquete lá em cima 👆',
+      'Para entrar ou sair, responda na enquete do racha 👆',
     ].join('\n'),
   );
+}
+
+/**
+ * Registra uma ENTRADA (confirmacao, convidado, nome corrigido).
+ *
+ * Fica em silencio, exceto quando a lista acabou de lotar - aquela e a hora em
+ * que o grupo precisa saber, senao gente continua tentando entrar.
+ */
+async function registrarEntrada(
+  ctx: Sessao,
+  partida: Partida,
+): Promise<void> {
+  const itens = await listar(partida.id);
+  const { lotouAgora } = await sincronizarStatus(partida, itens);
+  if (!lotouAgora) return;
+
+  // O cabecalho NAO repete "lista completa": `publicarLista` ja acrescenta o
+  // alerta, e o rodape da lista tambem diz. Antes a mesma frase saia tres
+  // vezes na mesma mensagem.
+  await publicarLista(ctx, partida, `📣 ${ctx.nomeNaLista} fechou a lista!`);
+}
+
+/**
+ * Registra uma SAIDA.
+ *
+ * Aviso de saida CONGELADO por decisao (12/08/2026): ainda em observacao de
+ * como o grupo e o bot se comportam, mesmo com a lista ja lotada. Ate
+ * descongelar, so sincroniza status/lista_lotou_em em silencio - o digest das
+ * 19:00 continua sendo o unico jeito do grupo ver quem saiu.
+ *
+ * Para reativar: trocar o corpo por
+ *   if (!partida.lista_lotou_em) return;
+ *   await publicarLista(ctx, partida, cabecalho);
+ */
+async function registrarSaida(
+  _ctx: Sessao,
+  partida: Partida,
+  _cabecalho: string,
+): Promise<void> {
+  const itens = await listar(partida.id);
+  await sincronizarStatus(partida, itens);
 }
 
 // ---------------------------------------------------------------------------
 // Dialogo no privado
 // ---------------------------------------------------------------------------
 
-async function pedirPosicao(
-  ctx: Sessao,
-  partidaId: number,
-  dados: conversa.DadosConversa,
-): Promise<void> {
-  const proximo = dados.pendentes?.[0];
-  if (proximo === undefined) return;
-  await conversa.salvar(ctx.jogadorId, partidaId, 'aguardando_posicao', dados);
-  await noPrivado(
-    ctx,
-    `${proximo} joga de linha ou de gol?\nResponda: linha  ou  gol\n("cancelar" para desistir da pergunta)`,
-  );
-}
-
+/**
+ * Registra os convidados de uma vez.
+ *
+ * Sem pergunta de posicao: todos sao de linha, porque os goleiros vem
+ * contratados por fora e o bot nao os controla. Antes eram duas perguntas por
+ * convidado; agora e uma so, com os nomes na mesma mensagem.
+ */
 async function iniciarConvidados(
   ctx: Sessao,
   partida: Partida,
   nomes: readonly string[],
 ): Promise<void> {
-  await pedirPosicao(ctx, partida.id, { pendentes: nomes, registrados: [] });
+  await conversa.limpar(ctx.jogadorId);
+
+  const entraram: string[] = [];
+  for (const nome of nomes) {
+    const r = await adicionarConvidado(partida, ctx.jogadorId, nome, 'linha');
+    if (r.ok) entraram.push(nome);
+    else await noPrivado(ctx, `${nome}: ${r.motivo}`);
+  }
+  await fecharRodada(ctx, partida, entraram);
 }
 
 /** Encerra a rodada de convidados e resume o que entrou. */
 async function fecharRodada(
   ctx: Sessao,
   partida: Partida,
-  registrados: readonly { nome: string; posicao: Posicao }[],
+  entraram: readonly string[],
 ): Promise<void> {
-  await conversa.limpar(ctx.jogadorId);
-  if (!registrados.length) return;
-
-  const linhas = registrados.map(
-    (r) => `  ${r.nome} (${r.posicao === 'gol' ? 'gol' : 'linha'})`,
-  );
-  await noPrivado(ctx, ['Anotado:', ...linhas].join('\n'), { rodape: true });
-
-  const nomes = registrados.map((r) => r.nome).join(', ');
-  await publicarLista(
-    ctx,
-    partida,
-    `➕ ${ctx.nomeNaLista} trouxe ${registrados.length === 1 ? '1 convidado' : `${registrados.length} convidados`}: ${nomes}`,
-  );
-}
-
-/**
- * Confere o nome antes de a pessoa aparecer na lista.
- *
- * O pushName do WhatsApp e o que a pessoa escolheu para o app: as vezes so o
- * primeiro nome, as vezes um apelido que ninguem do racha reconhece. Perguntar
- * uma unica vez evita lista cheia de "Ju", "Grandao" e afins.
- */
-async function perguntarNome(ctx: Sessao, partida: Partida): Promise<void> {
-  await conversa.salvar(ctx.jogadorId, partida.id, 'confirmando_nome', {});
-  await noPrivado(
-    ctx,
-    [
-      `Na lista voce vai aparecer como *${ctx.nomeNaLista}*.`,
-      '',
-      'Ta certo assim? (sim / nao)',
-    ].join('\n'),
-  );
-}
-
-async function pedirNomeCerto(ctx: Sessao, partida: Partida): Promise<void> {
-  await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_nome', {});
-  await noPrivado(
-    ctx,
-    [
-      'Sem problema. Como voce quer aparecer na lista?',
-      '',
-      'Use o primeiro nome e o sobrenome, ou um apelido que o pessoal',
-      'do racha reconheca. Por exemplo:',
-      '  Fausto Soares',
-      '  Fausto o craque',
-    ].join('\n'),
-  );
-}
-
-/** Depois de resolver o nome, segue para a pergunta de convidados. */
-async function seguirDepoisDoNome(
-  ctx: Sessao,
-  partida: Partida,
-): Promise<void> {
-  await conversa.limpar(ctx.jogadorId);
-  if (!convidadosLiberados(partida)) return;
-
-  await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_nomes', {});
-  await noPrivado(
-    ctx,
-    [
-      'Vai levar convidado?',
-      'Manda os nomes separados por virgula (ex: Joao, Pedro),',
-      'ou responda "nao".',
-    ].join('\n'),
-  );
+  if (!entraram.length) return;
+  await noPrivado(ctx, `Anotado: ${entraram.join(', ')}.`, { rodape: true });
+  await registrarEntrada(ctx, partida);
 }
 
 async function continuarDialogo(
@@ -339,61 +314,9 @@ async function continuarDialogo(
   // "cancelar" abandona a PERGUNTA. Nao e o mesmo que "fora", que sai do racha.
   if (intencao?.tipo === 'cancelar') {
     await conversa.limpar(ctx.jogadorId);
-    await noPrivado(ctx, 'Ok, cancelei. Voce continua na lista.', {
+    await noPrivado(ctx, 'Ok, cancelei. Você continua na lista.', {
       rodape: true,
     });
-    return;
-  }
-
-  if (conv.estado === 'confirmando_nome') {
-    if (intencao?.tipo === 'afirmativa') {
-      await confirmarNome(ctx.jogadorId);
-      await seguirDepoisDoNome(ctx, partida);
-      return;
-    }
-    if (intencao?.tipo === 'negativa' || intencao?.tipo === 'desistir') {
-      await pedirNomeCerto(ctx, partida);
-      return;
-    }
-    await noPrivado(
-      ctx,
-      `Na lista voce aparece como *${ctx.nomeNaLista}*. Ta certo? Responda "sim" ou "nao".`,
-    );
-    return;
-  }
-
-  if (conv.estado === 'aguardando_nome') {
-    const novo = ctx.texto.trim();
-
-    // Sem isso, quem responde "fora" ou "lista" aqui fica cadastrado com esse
-    // nome na lista do racha. O texto e livre, mas nao a esse ponto.
-    if (intencao && intencao.tipo !== 'numeros') {
-      await noPrivado(
-        ctx,
-        [
-          `"${novo}" é um comando, não dá para usar como nome.`,
-          '',
-          'Como voce quer aparecer na lista? Por exemplo:',
-          '  Fausto Soares',
-          '  Fausto o craque',
-        ].join('\n'),
-      );
-      return;
-    }
-
-    if (novo.length < 2 || novo.length > 40) {
-      await noPrivado(
-        ctx,
-        'Nome muito curto ou muito longo. Manda entre 2 e 40 caracteres,\ncomo "Fausto Soares" ou "Fausto o craque".',
-      );
-      return;
-    }
-    await definirNomeEscolhido(ctx.jogadorId, novo);
-    await noPrivado(ctx, `Feito! Agora voce aparece como *${novo}*.`);
-    // A lista ja foi publicada com o nome antigo: republica para o grupo ver
-    // quem e essa pessoa, senao o anuncio anterior fica orfao.
-    await publicarLista(ctx, partida, `✏️ Agora com o nome certo: ${novo}`);
-    await seguirDepoisDoNome({ ...ctx, nomeNaLista: novo }, partida);
     return;
   }
 
@@ -402,7 +325,7 @@ async function continuarDialogo(
       await conversa.limpar(ctx.jogadorId);
         await noPrivado(
         ctx,
-        'Beleza, sem convidados. Se mudar de ideia, e so falar "vou levar um convidado".',
+        'Beleza, sem convidados. Se mudar de ideia, é só falar "vou levar um convidado".',
         { rodape: true },
       );
       return;
@@ -414,9 +337,9 @@ async function continuarDialogo(
         ctx,
         [
           'Boa! Agora manda os NOMES dos convidados.',
-          'Exemplo: Joao, Pedro',
+          'Exemplo: João, Pedro',
           '',
-          'Se desistir, responda "nao".',
+          'Se desistir, responda "não".',
         ].join('\n'),
       );
       return;
@@ -453,13 +376,13 @@ async function continuarDialogo(
       await noPrivado(
         ctx,
         [
-          `Nao entendi "${ctx.texto.trim()}".`,
+          `Não entendi "${ctx.texto.trim()}".`,
           '',
           numerada,
           '',
           candidatos.length === 1
-            ? 'Ele vai mesmo assim? "sim" ou "nao".'
-            : 'Responda o numero (ou "1, 2"), "todos", ou "nao".',
+            ? 'Ele vai mesmo assim? "sim" ou "não".'
+            : 'Responda o número (ou "1, 2"), "todos", ou "não".',
         ].join('\n'),
       );
       return;
@@ -489,128 +412,20 @@ async function continuarDialogo(
     await noPrivado(ctx, `Beleza, ${voltaram.join(', ')} continua na lista.`, {
       rodape: true,
     });
-    await publicarLista(
-      ctx,
-      partida,
-      `↩️ ${voltaram.join(', ')} vai${voltaram.length > 1 ? 'o' : ''} mesmo sem ${ctx.nomeNaLista}.`,
-    );
+    await registrarEntrada(ctx, partida);
     return;
   }
 
-  if (conv.estado === 'confirmando_remocao') {
-    const alvo = conv.dados.candidatos?.[0];
-    if (!alvo) {
-      await conversa.limpar(ctx.jogadorId);
-      return;
-    }
-    if (intencao?.tipo === 'afirmativa') {
-      await removerEscolhidos(ctx, partida, [alvo]);
-      return;
-    }
-    if (intencao?.tipo === 'negativa' || intencao?.tipo === 'desistir') {
-      await conversa.limpar(ctx.jogadorId);
-      await noPrivado(ctx, 'Cancelado, ninguem foi tirado.', { rodape: true });
-      return;
-    }
-    await noPrivado(ctx, `Tirar ${alvo.nome} da lista? Responda "sim" ou "nao".`);
-    return;
-  }
-
-  if (conv.estado === 'aguardando_remocao') {
-    const candidatos = conv.dados.candidatos ?? [];
-
-    if (intencao?.tipo === 'negativa' || intencao?.tipo === 'desistir') {
-      await conversa.limpar(ctx.jogadorId);
-      await noPrivado(ctx, 'Cancelado, ninguem foi tirado.', { rodape: true });
-      return;
-    }
-    if (intencao?.tipo === 'todos') {
-      await removerEscolhidos(ctx, partida, candidatos);
-      return;
-    }
-    if (intencao?.tipo === 'numeros') {
-      const escolhidos = candidatos.filter((c) =>
-        intencao.numeros.includes(c.indice),
-      );
-      if (!escolhidos.length) {
-        await noPrivado(
-          ctx,
-          `Numero fora da lista. Escolha entre 1 e ${candidatos.length}.`,
-        );
-        return;
-      }
-      await removerEscolhidos(ctx, partida, escolhidos);
-      return;
-    }
-
-    const numerada = candidatos
-      .map((c) => `${c.indice}. ${c.nome}`)
-      .join('\n');
-    await noPrivado(
-      ctx,
-      [
-        `Nao entendi "${ctx.texto.trim()}".`,
-        '',
-        numerada,
-        '',
-        'Responda o numero (ou "1, 2", ou "todos", ou "nao" para cancelar).',
-      ].join('\n'),
-    );
-    return;
-  }
-
-  // aguardando_posicao
-  if (intencao?.tipo !== 'posicao') {
-    const proximo = conv.dados.pendentes?.[0] ?? 'o convidado';
-    await noPrivado(
-      ctx,
-      [
-        `Nao entendi "${ctx.texto.trim()}".`,
-        '',
-        `${proximo} joga de linha ou de gol?`,
-        'Responda: linha  ou  gol',
-      ].join('\n'),
-    );
-    return;
-  }
-
-  const pendentes = [...(conv.dados.pendentes ?? [])];
-  const nome = pendentes.shift();
-  if (nome === undefined) {
-    await conversa.limpar(ctx.jogadorId);
-    return;
-  }
-
-  const registrados = [...(conv.dados.registrados ?? [])];
-  const r = await adicionarConvidado(
-    partida,
-    ctx.jogadorId,
-    nome,
-    intencao.posicao,
-  );
-  if (r.ok) {
-    registrados.push({ nome, posicao: intencao.posicao });
-  } else {
-    await noPrivado(ctx, `${nome}: ${r.motivo}`);
-  }
-
-  if (pendentes.length) {
-    await pedirPosicao(ctx, partida.id, { pendentes, registrados });
-    return;
-  }
-  await fecharRodada(ctx, partida, registrados);
+  // Nenhum outro estado precisa de tratamento: convidados entram direto e o
+  // unico dialogo restante e o de convidado orfao, tratado acima.
 }
 
 // ---------------------------------------------------------------------------
 // Intencoes
 // ---------------------------------------------------------------------------
 
-async function tratarConfirmar(
-  ctx: Sessao,
-  partida: Partida,
-  posicao: Posicao,
-): Promise<void> {
-  const r = await confirmarFixo(partida, ctx.jogadorId, posicao);
+async function tratarConfirmar(ctx: Sessao, partida: Partida): Promise<void> {
+  const r = await confirmarFixo(partida, ctx.jogadorId, 'linha');
   if (!r.ok) {
     await noPrivado(ctx, r.motivo, { rodape: true });
     return;
@@ -619,7 +434,7 @@ async function tratarConfirmar(
   await noPrivado(
     ctx,
     r.valor.jaEstava
-      ? 'Voce ja estava na lista.'
+      ? 'Você já estava na lista.'
       : `Confirmado como ${r.valor.posicao}. ✅`,
     { rodape: true },
   );
@@ -627,24 +442,9 @@ async function tratarConfirmar(
   // Ja estava na lista e nada mudou: republicar seria so ruido.
   if (r.valor.jaEstava) return;
 
-  await publicarLista(
-    ctx,
-    partida,
-    r.valor.novo
-      ? `✅ ${ctx.nomeNaLista} confirmou (${r.valor.posicao === 'gol' ? 'gol' : 'linha'}).`
-      : `🔄 ${ctx.nomeNaLista} agora vai de ${r.valor.posicao === 'gol' ? 'gol' : 'linha'}.`,
-  );
+  await registrarEntrada(ctx, partida);
 
-  // Trocar de linha para gol nao e entrar na lista: nao repergunta o nome nem
-  // abre a conversa de convidados de novo.
   if (!r.valor.novo) return;
-
-  // Confere o nome UMA vez, antes de qualquer outra pergunta: e ele que vai
-  // aparecer na lista do grupo daqui em diante.
-  if (!ctx.nomeConfirmado) {
-    await perguntarNome(ctx, partida);
-    return;
-  }
 
   // A pergunta sobre convidados so faz sentido depois de quinta 12:00.
   if (convidadosLiberados(partida)) {
@@ -653,17 +453,36 @@ async function tratarConfirmar(
       ctx,
       [
         'Vai levar convidado?',
-        'Manda os nomes separados por virgula (ex: Joao, Pedro),',
-        'ou responda "nao".',
+        'Manda os nomes separados por vírgula (ex: João, Pedro),',
+        'ou responda "não".',
       ].join('\n'),
     );
   }
 }
 
-async function tratarDesistir(ctx: Sessao, partida: Partida): Promise<void> {
+/**
+ * @param opcoes.origemVoto true quando veio de um voto na enquete do grupo.
+ *
+ * A distincao importa: acionado por VOTO, qualquer mensagem no privado e
+ * conversa que o BOT inicia - tem que passar pela fila e respeitar quem pediu
+ * silencio. Acionado por texto no privado, e resposta, e sai direto.
+ *
+ * Sem isso, votar "Nao vou" sem estar na lista mandava DM fria para quem nunca
+ * falou com o bot, furando a protecao que o resto do codigo mantem.
+ */
+async function tratarDesistir(
+  ctx: Sessao,
+  partida: Partida,
+  opcoes: { origemVoto?: boolean } = {},
+): Promise<void> {
+  const falarNoPrivado = (texto: string): void => {
+    if (opcoes.origemVoto) puxarConversa(ctx, texto);
+    else void noPrivado(ctx, texto);
+  };
+
   const r = await desistir(partida, ctx.jogadorId);
   if (!r.ok) {
-    await noPrivado(ctx, r.motivo);
+    falarNoPrivado(r.motivo);
     return;
   }
 
@@ -673,21 +492,8 @@ async function tratarDesistir(ctx: Sessao, partida: Partida): Promise<void> {
   const n = convidados.length;
   const extra = n > 0 ? ` (levou ${n} convidado${n > 1 ? 's' : ''} junto)` : '';
 
-  // Goleiro saindo tem nome e sobrenome no anuncio: e a saida que mais
-  // atrapalha, e o grupo precisa reagir a ela, nao so ler mais uma linha.
-  const goleirosQueSairam = [
-    ...(r.valor.posicao === 'gol' ? [ctx.nomeNaLista] : []),
-    ...convidados.filter((c) => c.posicao === 'gol').map((c) => c.nome),
-  ];
-
-  const cabecalho = goleirosQueSairam.length
-    ? [
-        `🧤 ATENCAO: ${goleirosQueSairam.join(' e ')} era GOLEIRO e NAO vai mais!`,
-        'Precisamos convocar outro goleiro.',
-      ].join('\n')
-    : `❌ ${ctx.nomeNaLista} NAO vai mais${extra}. Liberou vaga!`;
-
-  await publicarLista(ctx, partida, cabecalho);
+  const cabecalho = `❌ ${ctx.nomeNaLista} não vai mais${extra}. Liberou vaga!`;
+  await registrarSaida(ctx, partida, cabecalho);
 
   if (n === 0) return;
 
@@ -705,23 +511,22 @@ async function tratarDesistir(ctx: Sessao, partida: Partida): Promise<void> {
 
   const numerada = candidatos
     .map(
-      (c) => `${c.indice}. ${c.nome} (${c.posicao === 'gol' ? 'gol' : 'linha'})`,
+      (c) => `${c.indice}. ${c.nome}`,
     )
     .join('\n');
-  await noPrivado(
-    ctx,
+  falarNoPrivado(
     [
       n === 1
         ? 'Seu convidado saiu junto:'
-        : 'Seus convidados sairam junto:',
+        : 'Seus convidados saíram junto:',
       numerada,
       '',
       n === 1
-        ? 'Ele vai mesmo assim? Responda "sim" ou "nao".'
+        ? 'Ele vai mesmo assim? Responda "sim" ou "não".'
         : 'Algum deles vai mesmo assim?',
       n === 1
         ? ''
-        : 'Responda o numero (ou "1, 2"), "todos", ou "nao" se nenhum vai.',
+        : 'Responda o número (ou "1, 2"), "todos", ou "não" se nenhum vai.',
     ]
       .filter((l) => l !== '')
       .join('\n'),
@@ -736,7 +541,7 @@ async function tratarConvidados(
   if (!convidadosLiberados(partida)) {
     await noPrivado(
       ctx,
-      'Convidados so a partir de quinta 12:00. Ate la a lista e dos fixos.',
+      'Convidados só a partir de quinta, meio-dia. Até lá a lista é dos fixos.',
       { rodape: true },
     );
     return;
@@ -755,7 +560,7 @@ async function tratarQueroConvidar(
   if (!convidadosLiberados(partida)) {
     await noPrivado(
       ctx,
-      'Convidados so a partir de quinta 12:00. Ate la a lista e dos fixos.',
+      'Convidados só a partir de quinta, meio-dia. Até lá a lista é dos fixos.',
       { rodape: true },
     );
     return;
@@ -765,9 +570,9 @@ async function tratarQueroConvidar(
   await noPrivado(
     ctx,
     [
-      'Boa! Quem voce vai levar?',
-      'Manda o nome. Se for mais de um, separe por virgula:',
-      '  Joao, Pedro',
+      'Boa! Quem você vai levar?',
+      'Manda o nome. Se for mais de um, separe por vírgula:',
+      '  João, Pedro',
       '',
       '("cancelar" se mudou de ideia)',
     ].join('\n'),
@@ -775,109 +580,54 @@ async function tratarQueroConvidar(
 }
 
 /**
- * Tirar convidado e sempre uma conversa no PRIVADO, nunca uma acao direta.
+ * Tira um convidado da lista, pelo nome, sem dialogo.
  *
- * Duas razoes: a escolha por numero so faz sentido depois de ver a lista
- * numerada (senao e chute), e a negociacao de quem sai nao interessa ao grupo -
- * o que o grupo precisa saber e o resultado, que sai no anuncio.
+ * Uma mensagem resolve o caso comum. O caso raro - dois convidados com o mesmo
+ * nome - e o unico que pede uma segunda mensagem, e paga o proprio custo.
  */
-async function tratarTirar(
+async function tratarTirarConvidado(
   ctx: Sessao,
   partida: Partida,
-  indice: number | undefined,
+  nome: string,
 ): Promise<void> {
-  const itens = await listar(partida.id);
-  const meus = convidadosDe(itens, ctx.jogadorId);
+  const r = await removerConvidado(partida, ctx.jogadorId, nome);
 
-  if (!meus.length) {
-    await noPrivado(ctx, 'Voce nao tem convidados nesta lista.', {
+  if (r.tipo === 'sem_convidados') {
+    await noPrivado(ctx, 'Você não tem convidados nesta lista.', {
       rodape: true,
     });
     return;
   }
 
-  const candidatos: conversa.Candidato[] = meus.map((c, n) => ({
-    indice: n + 1,
-    nome: c.nome,
-    posicao: c.posicao,
-  }));
-
-  const numerada = candidatos
-    .map((c) => `${c.indice}. ${c.nome} (${c.posicao === 'gol' ? 'gol' : 'linha'})`)
-    .join('\n');
-
-
-  // Veio com numero: a pessoa escolheu, mas sem ter visto a lista. Confirma
-  // mostrando quem e, para nao tirar o convidado errado por erro de contagem.
-  if (indice !== undefined) {
-    const alvo = candidatos.find((c) => c.indice === indice);
-    if (!alvo) {
-      await noPrivado(
-        ctx,
-        [`Voce tem ${candidatos.length} convidado(s):`, numerada, '', 'Qual voce quer tirar?'].join('\n'),
-      );
-      await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_remocao', {
-        candidatos,
-      });
-      return;
-    }
-    await conversa.salvar(ctx.jogadorId, partida.id, 'confirmando_remocao', {
-      candidatos: [alvo],
-    });
-    await noPrivado(ctx, `Tirar ${alvo.nome} da lista? (sim / nao)`);
+  if (r.tipo === 'nao_encontrado') {
+    // Devolve a lista dela junto: resolve na mesma mensagem em vez de mandar
+    // a pessoa procurar o nome certo em outro lugar.
+    await noPrivado(
+      ctx,
+      [
+        `Você não tem nenhum convidado chamado "${nome}".`,
+        `Seus convidados: ${r.seus.join(', ')}`,
+      ].join('\n'),
+    );
     return;
   }
 
-  await noPrivado(
-    ctx,
-    [
-      'Seus convidados:',
-      numerada,
-      '',
-      'Qual voce quer tirar? Responda o numero.',
-      'Pode tirar mais de um: "1, 2". Ou "todos".',
-      'Para cancelar, responda "nao".',
-    ].join('\n'),
-  );
-  await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_remocao', {
-    candidatos,
-  });
-}
-
-/** Executa a remocao ja confirmada e anuncia o resultado no grupo. */
-async function removerEscolhidos(
-  ctx: Sessao,
-  partida: Partida,
-  escolhidos: readonly conversa.Candidato[],
-): Promise<void> {
-  await conversa.limpar(ctx.jogadorId);
-
-  // De tras para frente: remover o 1o mudaria o indice dos seguintes.
-  const ordenados = [...escolhidos].sort((a, b) => b.indice - a.indice);
-  const removidos: string[] = [];
-  for (const c of ordenados) {
-    const r = await removerConvidado(partida, ctx.jogadorId, c.indice);
-    if (r.ok) removidos.push(r.valor.nome);
-    else await noPrivado(ctx, `${c.nome}: ${r.motivo}`);
+  if (r.tipo === 'ambiguo') {
+    await noPrivado(
+      ctx,
+      [
+        `Você tem ${r.quantos} convidados chamados "${r.nome}".`,
+        'Escreva o nome completo, como "João Silva".',
+      ].join('\n'),
+    );
+    return;
   }
-  if (!removidos.length) return;
 
-  removidos.reverse();
-  await noPrivado(ctx, `Tirei: ${removidos.join(', ')}.`, { rodape: true });
-
-  const goleiros = ordenados
-    .filter((c) => c.posicao === 'gol' && removidos.includes(c.nome))
-    .map((c) => c.nome);
-
-  await publicarLista(
+  await noPrivado(ctx, `Tirei o ${r.nome} da lista.`, { rodape: true });
+  await registrarSaida(
     ctx,
     partida,
-    goleiros.length
-      ? [
-          `🧤 ATENCAO: ${goleiros.join(' e ')} era GOLEIRO e NAO vai mais!`,
-          'Precisamos convocar outro goleiro.',
-        ].join('\n')
-      : `❌ ${removidos.join(', ')} (convidado${removidos.length > 1 ? 's' : ''} de ${ctx.nomeNaLista}) NAO vai${removidos.length > 1 ? 'o' : ''} mais. Liberou vaga!`,
+    `❌ ${r.nome} (convidado de ${ctx.nomeNaLista}) não vai mais. Liberou vaga!`,
   );
 }
 
@@ -935,6 +685,13 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
   const acao = interpretar(opcao);
   if (!acao) return;
 
+  // Janela ANTES de resolver identidade: voto em partida fechada nao deve nem
+  // criar cadastro de jogador.
+  if (!listaAberta(partida)) {
+    v.log.info({ partida: partida.data_jogo }, 'voto fora da janela, ignorado');
+    return;
+  }
+
   const jogador = await resolver({
     lid: v.votanteLid,
     telefone: v.votanteTelefone,
@@ -953,17 +710,10 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
     log: v.log,
     jogadorId: jogador.id,
     nomeNaLista: jogador.nome,
-    nomeConfirmado: jogador.nomeConfirmado,
     falouNoPrivado: jogador.falouNoPrivado,
-    naoPerturbe: jogador.naoPerturbe,
   };
 
-  if (!listaAberta(partida)) {
-    v.log.info({ partida: partida.data_jogo }, 'voto fora da janela, ignorado');
-    return;
-  }
-
-  const anterior = await registrarVoto(partida.id, ctx.jogadorId, opcao);
+  const anterior = await votoAnterior(partida.id, ctx.jogadorId);
   v.log.info(
     { votante: ctx.nomeNaLista, opcao, anterior: anterior ?? null },
     'voto recebido',
@@ -974,7 +724,8 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
   if (anterior === opcao) return;
 
   if (acao.tipo === 'desistir') {
-    await tratarDesistir(ctx, partida);
+    await tratarDesistir(ctx, partida, { origemVoto: true });
+    await registrarVoto(partida.id, ctx.jogadorId, opcao);
     return;
   }
 
@@ -982,9 +733,16 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
   if (!r.ok) {
     // Recusa (lista cheia) precisa aparecer: o voto ficou marcado na enquete e
     // a pessoa acharia que entrou.
+    //
+    // O voto NAO e registrado aqui de proposito: registrar uma tentativa que
+    // falhou faria a proxima tentativa identica ser silenciada pelo dedupe, e
+    // a pessoa nunca entraria quando abrisse vaga.
     await avisarGrupo(ctx, `⚠️ ${ctx.nomeNaLista}: ${r.motivo}`);
     return;
   }
+
+  // Deu certo: agora sim o voto vira o "anterior" das proximas vezes.
+  await registrarVoto(partida.id, ctx.jogadorId, opcao);
 
   const comConvidado = acao.tipo === 'confirmar_com_convidado';
 
@@ -995,13 +753,9 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
   // O texto deixa o PENDENTE visivel: entre o voto e a resposta com o nome, o
   // convidado ainda nao existe na lista. Assim o proprio grupo cobra, sem o
   // bot precisar insistir no privado.
-  await publicarLista(
-    ctx,
-    partida,
-    comConvidado
-      ? `👥 ${ctx.nomeNaLista} marcou que vai e vai levar convidado — falta me mandar o nome.`
-      : `✅ ${ctx.nomeNaLista} marcou que vai.`,
-  );
+  // Confirmacao NAO interrompe o grupo: sao dezenas por semana e a lista sai
+  // no digest das 19:00. So o "lotou agora" escapa daqui.
+  await registrarEntrada(ctx, partida);
 
   if (!comConvidado) return;
 
@@ -1010,7 +764,7 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
   if (!convidadosLiberados(partida)) {
     await avisarGrupo(
       ctx,
-      `⏳ ${ctx.nomeNaLista}, convidado so a partir de quinta 12:00. Vote de novo depois que abrir que eu te chamo.`,
+      `⏳ ${ctx.nomeNaLista}, convidado só a partir de quinta ao meio-dia. Vote de novo depois que abrir que eu te chamo.`,
     );
     return;
   }
@@ -1022,11 +776,11 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
     ctx,
     [
       jogador.falouNoPrivado
-        ? 'Voce marcou na enquete que vai levar convidado 👥'
-        : 'Oi! Eu cuido da lista do racha ⚽\nVoce marcou na enquete que vai levar convidado.',
+        ? 'Você marcou na enquete que vai levar convidado 👥'
+        : 'Oi! Eu cuido da lista do racha ⚽\nVocê marcou na enquete que vai levar convidado.',
       '',
-      'Quem voce vai levar? Manda o nome.',
-      'Se for mais de um, separe por virgula: Joao, Pedro',
+      'Quem você vai levar? Manda o nome.',
+      'Se for mais de um, separe por vírgula: João, Pedro',
       '',
       '("cancelar" se mudou de ideia)',
     ].join('\n'),
@@ -1053,10 +807,10 @@ function ajudaDoGrupo(): string {
   return [
     '⚽ Eu cuido da lista do racha.',
     '',
-    'Aqui no grupo eu publico a lista a cada mudanca.',
+    'Aqui no grupo eu publico a lista às 19:00 e quando alguém sai.',
     'Digite "lista" para ver a atual.',
     '',
-    'Para confirmar presenca, sair ou levar convidado, fale comigo no privado:',
+    'Para entrar ou sair, é só tocar na enquete do racha aqui no grupo.',
     comoFalarComOBot(),
   ].join('\n');
 }
@@ -1095,6 +849,22 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     return;
   }
 
+  // Porta de entrada: o bot so conversa com quem e do grupo.
+  //
+  // Vale para TUDO, inclusive "ajuda" e "vou". O numero do bot nao e uma linha
+  // dedicada - gente de fora escreve para ele achando que fala com o dono, e
+  // essas pessoas nao tem nada a ver com o racha.
+  //
+  // Checado antes de resolver a identidade: quem nao e do grupo nem chega a
+  // virar cadastro no banco.
+  if (!(await ehMembro(entrada.log, entrada))) {
+    entrada.log.info(
+      { telefone: entrada.telefone, texto: entrada.texto.slice(0, 40) },
+      'mensagem de quem nao e membro do grupo, ignorando',
+    );
+    return;
+  }
+
   // Une @lid e telefone num unico jogador. Sem isso, a mesma pessoa vira dois
   // cadastros: um pelo grupo e outro pelo privado.
   const jogador = await resolver({
@@ -1107,9 +877,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     ...entrada,
     jogadorId: jogador.id,
     nomeNaLista: jogador.nome,
-    nomeConfirmado: jogador.nomeConfirmado,
     falouNoPrivado: jogador.falouNoPrivado,
-    naoPerturbe: jogador.naoPerturbe,
   };
 
   const partida = await partidaAtual();
@@ -1130,9 +898,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
   {
     const conv = await conversa.carregar(ctx.jogadorId);
     if (conv) {
-      const nomeEmJogo =
-        conv.estado === 'aguardando_nome' || conv.estado === 'confirmando_nome';
-      if (nomeEmJogo || !intencao || !COMANDOS_FORTES.has(intencao.tipo)) {
+      if (!intencao || !COMANDOS_FORTES.has(intencao.tipo)) {
         // A conversa continua na partida em que comecou. Se a semana virar no
         // meio do dialogo, o convidado tem que entrar na lista certa.
         const daConversa =
@@ -1153,34 +919,11 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     !intencao ||
     intencao.tipo === 'afirmativa' ||
     intencao.tipo === 'negativa' ||
-    intencao.tipo === 'posicao' ||
     intencao.tipo === 'numeros' ||
     intencao.tipo === 'todos';
 
   if (semSignificadoSolto) {
-    await noPrivado(ctx, `Nao entendi "${ctx.texto.trim()}".\n\n${AJUDA}`);
-    return;
-  }
-
-  if (intencao.tipo === 'nao_perturbe') {
-    await definirNaoPerturbe(ctx.jogadorId, true);
-    await noPrivado(
-      ctx,
-      [
-        'Beleza, nao te chamo mais 🤐',
-        '',
-        'Voce continua entrando na lista normalmente reagindo 👍 no grupo,',
-        'e sempre que me escrever eu respondo.',
-        '',
-        'Para voltar a receber, e so mandar "pode me chamar".',
-      ].join('\n'),
-    );
-    return;
-  }
-
-  if (intencao.tipo === 'pode_perturbar') {
-    await definirNaoPerturbe(ctx.jogadorId, false);
-    await noPrivado(ctx, 'Voltei a te chamar quando precisar 👍');
+    await noPrivado(ctx, `Não entendi "${ctx.texto.trim()}".\n\n${AJUDA}`);
     return;
   }
 
@@ -1195,18 +938,10 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     return;
   }
 
-  if (intencao.tipo === 'meus_convidados') {
-    const itens = await listar(partida.id);
-    await noPrivado(ctx, formatarConvidadosDe(itens, ctx.jogadorId), {
-      rodape: true,
-    });
-    return;
-  }
-
   if (!listaAberta(partida)) {
     await noPrivado(
       ctx,
-      `A lista do racha de ${partida.data_jogo} nao esta aberta agora.`,
+      `A lista do racha de ${partida.data_jogo} não está aberta agora.`,
       { rodape: true },
     );
     return;
@@ -1214,7 +949,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
 
   switch (intencao.tipo) {
     case 'confirmar':
-      await tratarConfirmar(ctx, partida, intencao.posicao);
+      await tratarConfirmar(ctx, partida);
       return;
     case 'desistir':
       await tratarDesistir(ctx, partida);
@@ -1225,8 +960,8 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     case 'quero_convidar':
       await tratarQueroConvidar(ctx, partida);
       return;
-    case 'tirar':
-      await tratarTirar(ctx, partida, intencao.indice);
+    case 'tirar_convidado':
+      await tratarTirarConvidado(ctx, partida, intencao.nome);
       return;
     default:
       return; // posicao/negativa fora de dialogo: nao significam nada.

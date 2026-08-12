@@ -45,14 +45,13 @@ async function main(): Promise<void> {
              now() - interval '1 minute',
              now() + ($2 || ' minutes')::interval,
              now() + interval '7 days',
-             $3, $4)
+             $3, 0)
      returning id, data_jogo, abre_fixos, abre_convidados, fecha_em,
                vagas_total, vagas_goleiro, status`,
     [
       dataJogo,
       MINUTOS_ATE_CONVIDADOS,
       config.VAGAS_TOTAL,
-      config.VAGAS_GOLEIRO,
     ],
   );
   if (!partida) throw new Error('falha ao criar a partida de teste');

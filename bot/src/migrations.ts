@@ -242,4 +242,24 @@ export const migrations: readonly Migration[] = [
       alter table partida add column encerrada_em timestamptz;
     `,
   },
+  {
+    // Goleiro saiu do dominio: os 2 sao contratados por fora, nao ocupam vaga
+    // e nao aparecem na lista. A coluna fica como vestigio historico das
+    // partidas antigas, mas nao significa mais nada - por isso o default zero.
+    name: '009_sem_vaga_de_goleiro',
+    sql: `
+      alter table partida alter column vagas_goleiro set default 0;
+      update partida set vagas_goleiro = 0 where fecha_em > now();
+    `,
+  },
+  {
+    // Marca quando a lista bateu o total de vagas pela 1a vez nesta partida.
+    // Null = nunca lotou. Uma vez marcada, nunca e limpa: e o que permite
+    // distinguir "saida no meio da semana, lista ainda enchendo" (fica quieto)
+    // de "saida depois de ja ter lotado" (avisa - a vaga interessa a alguem).
+    name: '010_lista_lotou_marcador',
+    sql: `
+      alter table partida add column lista_lotou_em timestamptz;
+    `,
+  },
 ];
