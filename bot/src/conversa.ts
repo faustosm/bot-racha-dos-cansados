@@ -9,6 +9,10 @@ import type { Posicao } from './domain/tipos.js';
 export type Estado =
   /** Perguntou se vai levar convidados; espera nomes ou "nao". */
   | 'aguardando_nomes'
+  /** Nomes recebidos; pergunta se algum e goleiro antes de cadastrar. */
+  | 'aguardando_posicao_convidados'
+  /** Um convidado foi apontado como goleiro; pergunta contratado ou convidado. */
+  | 'aguardando_tipo_goleiro'
   /** A pessoa saiu e tinha convidados; espera saber quais continuam indo. */
   | 'convidados_orfaos';
 
@@ -24,6 +28,17 @@ export interface Candidato {
 export interface DadosConversa {
   /** Convidados oferecidos para remocao, na ordem mostrada. */
   readonly candidatos?: readonly Candidato[];
+  /**
+   * Nomes de convidados ainda sem posicao definida (estado
+   * 'aguardando_posicao_convidados').
+   */
+  readonly nomesPendentes?: readonly string[];
+  /**
+   * Fila de goleiros ja identificados, aguardando saber se sao contratados
+   * ou convidados - um de cada vez (estado 'aguardando_tipo_goleiro').
+   * O primeiro da fila e o que a pergunta atual se refere.
+   */
+  readonly filaGoleiros?: readonly string[];
 }
 
 export interface Conversa {

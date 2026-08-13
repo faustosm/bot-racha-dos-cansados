@@ -1,8 +1,14 @@
 import type { PoolClient } from 'pg';
 import { query, queryOne, transaction } from '../db.js';
-import { motivoDaRecusa } from './lista.js';
+import { motivoDaRecusa, motivoRecusaGoleiro } from './lista.js';
 import { erro, ok } from './tipos.js';
-import type { ItemLista, Partida, Posicao, Resultado } from './tipos.js';
+import type {
+  ItemGoleiro,
+  ItemLista,
+  Partida,
+  Posicao,
+  Resultado,
+} from './tipos.js';
 
 interface LinhaLista {
   id: number;
@@ -27,6 +33,7 @@ const SQL_LISTA = `
     left join jogador jc on jc.id = i.convidado_de_id
    where i.partida_id = $1
      and i.removido_em is null
+     and i.posicao = 'linha'
    order by i.criado_em, i.id
 `;
 
@@ -42,9 +49,44 @@ function paraItem(r: LinhaLista): ItemLista {
   };
 }
 
+/** So os jogadores de linha - goleiro tem lista propria, `listarGoleiros`. */
 export async function listar(partidaId: number): Promise<ItemLista[]> {
   const rows = await query<LinhaLista>(SQL_LISTA, [partidaId]);
   return rows.map(paraItem);
+}
+
+interface LinhaGoleiro {
+  id: number;
+  nome: string;
+  goleiro_contratado: boolean;
+  convidado_de_nome: string | null;
+  convidado_de_id: number | null;
+}
+
+const SQL_GOLEIROS = `
+  select i.id,
+         coalesce(j.nome_escolhido, j.nome, i.convidado_nome) as nome,
+         i.goleiro_contratado,
+         coalesce(jc.nome_escolhido, jc.nome) as convidado_de_nome,
+         i.convidado_de_id as convidado_de_id
+    from inscricao i
+    left join jogador j  on j.id = i.jogador_id
+    left join jogador jc on jc.id = i.convidado_de_id
+   where i.partida_id = $1
+     and i.removido_em is null
+     and i.posicao = 'gol'
+   order by i.criado_em, i.id
+`;
+
+export async function listarGoleiros(partidaId: number): Promise<ItemGoleiro[]> {
+  const rows = await query<LinhaGoleiro>(SQL_GOLEIROS, [partidaId]);
+  return rows.map((r) => ({
+    id: r.id,
+    nome: r.nome,
+    contratado: r.goleiro_contratado,
+    ...(r.convidado_de_nome ? { convidadoDe: r.convidado_de_nome } : {}),
+    ...(r.convidado_de_id !== null ? { convidadoDeId: r.convidado_de_id } : {}),
+  }));
 }
 
 /**
@@ -56,19 +98,19 @@ export async function listar(partidaId: number): Promise<ItemLista[]> {
 async function contarComLock(
   client: PoolClient,
   partidaId: number,
-): Promise<{ total: number; gols: number }> {
+): Promise<{ linha: number; gols: number }> {
   await client.query('select id from partida where id = $1 for update', [
     partidaId,
   ]);
-  const { rows } = await client.query<{ total: string; gols: string }>(
-    `select count(*)::text as total,
+  const { rows } = await client.query<{ linha: string; gols: string }>(
+    `select count(*) filter (where posicao = 'linha')::text as linha,
             count(*) filter (where posicao = 'gol')::text as gols
        from inscricao
       where partida_id = $1 and removido_em is null`,
     [partidaId],
   );
   return {
-    total: Number(rows[0]?.total ?? 0),
+    linha: Number(rows[0]?.linha ?? 0),
     gols: Number(rows[0]?.gols ?? 0),
   };
 }
@@ -101,10 +143,9 @@ export async function confirmarFixo(
       }
       // Troca de posicao: precisa caber no teto de goleiros da nova posicao.
       const contagem = await contarComLock(client, partida.id);
-      if (posicao === 'gol' && contagem.gols >= partida.vagas_goleiro) {
-        return erro<Confirmacao>(
-          `As ${partida.vagas_goleiro} vagas de goleiro ja estao ocupadas.`,
-        );
+      if (posicao === 'gol') {
+        const motivoGol = motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro);
+        if (motivoGol) return erro<Confirmacao>(motivoGol);
       }
       await client.query('update inscricao set posicao = $2 where id = $1', [
         existente.id,
@@ -116,7 +157,10 @@ export async function confirmarFixo(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDaRecusa(contagem.total, partida, 1);
+    const motivo =
+      posicao === 'gol'
+        ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
+        : motivoDaRecusa(contagem.linha, partida, 1);
     if (motivo) return erro<Confirmacao>(motivo);
 
     await client.query(
@@ -186,9 +230,14 @@ export async function adicionarConvidado(
   anfitriaoId: number,
   nome: string,
   posicao: Posicao,
-  // Falso apenas quando o anfitriao acabou de sair e esta decidindo se o
-  // convidado fica: nesse caso ele nao esta mais na lista, de proposito.
-  opcoes: { exigirAnfitriao?: boolean } = {},
+  opcoes: {
+    // Falso apenas quando o anfitriao acabou de sair e esta decidindo se o
+    // convidado fica: nesse caso ele nao esta mais na lista, de proposito.
+    exigirAnfitriao?: boolean;
+    // So faz sentido com posicao 'gol': contratado por fora, sem anfitriao de
+    // verdade - `anfitriaoId` fica so como "quem avisou", nao dono do goleiro.
+    contratado?: boolean;
+  } = {},
 ): Promise<Resultado<ItemLista>> {
   return transaction(async (client) => {
     if (opcoes.exigirAnfitriao !== false) {
@@ -205,15 +254,18 @@ export async function adicionarConvidado(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDaRecusa(contagem.total, partida, 1);
+    const motivo =
+      posicao === 'gol'
+        ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
+        : motivoDaRecusa(contagem.linha, partida, 1);
     if (motivo) return erro<ItemLista>(motivo);
 
     const { rows } = await client.query<{ id: number }>(
       `insert into inscricao
-         (partida_id, tipo, posicao, convidado_nome, convidado_de_id)
-       values ($1, 'convidado', $2, $3, $4)
+         (partida_id, tipo, posicao, convidado_nome, convidado_de_id, goleiro_contratado)
+       values ($1, 'convidado', $2, $3, $4, $5)
        returning id`,
-      [partida.id, posicao, nome, anfitriaoId],
+      [partida.id, posicao, nome, anfitriaoId, opcoes.contratado ?? false],
     );
     return ok({
       id: rows[0]?.id ?? 0,
@@ -283,7 +335,7 @@ export async function removerConvidado(
 }
 
 /** Compara nome sem depender de acento nem de caixa: "joao" acha "João". */
-function normalizarNome(n: string): string {
+export function normalizarNome(n: string): string {
   return n
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -319,7 +371,10 @@ export async function restaurarInscricao(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDaRecusa(contagem.total, partida, 1);
+    const motivo =
+      alvo.posicao === 'gol'
+        ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
+        : motivoDaRecusa(contagem.linha, partida, 1);
     if (motivo) return erro<{ nome: string; posicao: Posicao }>(motivo);
 
     await client.query(

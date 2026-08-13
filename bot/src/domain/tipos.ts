@@ -20,8 +20,6 @@ export interface Partida {
   readonly enquete_criador: string | null;
   /** Quando o encerramento foi anunciado no grupo. Null = ainda nao foi. */
   readonly encerrada_em: Date | null;
-  /** Quando a lista bateu o total de vagas pela 1a vez nesta partida. Null = ainda nao. */
-  readonly lista_lotou_em: Date | null;
 }
 
 /** Uma vaga ocupada, ja com o nome resolvido para exibicao. */
@@ -35,6 +33,20 @@ export interface ItemLista {
   /** Nome de quem trouxe. Presente apenas quando tipo === 'convidado'. */
   readonly convidadoDe?: string;
   /** Id de quem trouxe, para a remocao saber de quem e o convidado. */
+  readonly convidadoDeId?: number;
+}
+
+/**
+ * Um goleiro confirmado. Lista PROPRIA, separada da linha - nunca ocupa vaga
+ * dos 18 (ver VAGAS_GOLEIRO, teto proprio).
+ */
+export interface ItemGoleiro {
+  readonly id: number;
+  readonly nome: string;
+  /** Contratado por fora (sem anfitriao) vs convidado de um fixo. */
+  readonly contratado: boolean;
+  /** Nome de quem trouxe. Ausente quando contratado. */
+  readonly convidadoDe?: string;
   readonly convidadoDeId?: number;
 }
 

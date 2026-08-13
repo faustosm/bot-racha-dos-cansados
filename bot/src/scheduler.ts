@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { config } from './config.js';
 import { sendPoll, sendText } from './evolution/client.js';
-import { listar } from './domain/inscricao.js';
+import { listar, listarGoleiros } from './domain/inscricao.js';
 import {
   definirStatus,
   fecharVencidas,
@@ -137,6 +137,7 @@ async function abrirParaConvidados(log: Log): Promise<void> {
   const partida = await partidaAtual();
   if (!partida) return;
   const itens = await listar(partida.id);
+  const goleiros = await listarGoleiros(partida.id);
   log.info({ partida: partida.data_jogo }, 'convidados liberados');
   await anunciar(
     log,
@@ -145,7 +146,7 @@ async function abrirParaConvidados(log: Log): Promise<void> {
       'Quem já confirmou pode trazer alguém — é só marcar',
       '"Vou com convidado" na enquete que eu chamo no privado.',
       '',
-      formatarLista(partida, itens, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
     ].join('\n'),
   );
 }
@@ -161,6 +162,7 @@ async function fecharLista(log: Log): Promise<void> {
   const partida = await partidaParaLeitura();
   if (!partida) return;
   const itens = await listar(partida.id);
+  const goleiros = await listarGoleiros(partida.id);
   await definirStatus(partida.id, 'fechada');
   log.info({ partida: partida.data_jogo }, 'lista fechada');
   await anunciar(
@@ -168,7 +170,7 @@ async function fecharLista(log: Log): Promise<void> {
     [
       '🏁 Lista fechada! Bola em jogo às ' + config.RACHA_HORARIO.split(' ')[0] + '.',
       '',
-      formatarLista(partida, itens, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
     ].join('\n'),
   );
 }
@@ -185,6 +187,7 @@ export async function digestDoDia(log: Log): Promise<void> {
   if (!partida) return;
 
   const itens = await listar(partida.id);
+  const goleiros = await listarGoleiros(partida.id);
   const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
 
@@ -194,7 +197,7 @@ export async function digestDoDia(log: Log): Promise<void> {
     [
       `📋 Como está a lista para ${rotuloData(partida.data_jogo)}:`,
       '',
-      formatarLista(partida, itens, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
       'Para entrar ou sair, responda na enquete do racha 👆',
@@ -219,6 +222,7 @@ async function chamadaDeSexta(log: Log): Promise<void> {
     return;
   }
 
+  const goleiros = await listarGoleiros(partida.id);
   const faltam = config.MIN_JOGADORES - vagas.ocupadas;
   log.info({ ocupadas: vagas.ocupadas }, 'chamada de sexta');
   await anunciar(
@@ -230,7 +234,7 @@ async function chamadaDeSexta(log: Log): Promise<void> {
       '',
       'Quem ainda não respondeu, responde na enquete do racha 👆',
       '',
-      formatarLista(partida, itens, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
     ].join('\n'),
   );
 }

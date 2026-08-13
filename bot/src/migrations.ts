@@ -254,12 +254,30 @@ export const migrations: readonly Migration[] = [
   },
   {
     // Marca quando a lista bateu o total de vagas pela 1a vez nesta partida.
-    // Null = nunca lotou. Uma vez marcada, nunca e limpa: e o que permite
-    // distinguir "saida no meio da semana, lista ainda enchendo" (fica quieto)
-    // de "saida depois de ja ter lotado" (avisa - a vaga interessa a alguem).
+    // Substituida em 13/08/2026 por uma regra mais simples (avisar saida so
+    // sexta/sabado, ver `diaDeAvisarSaida` em domain/partida.ts) - a coluna
+    // fica como vestigio historico, sem leitor no codigo.
     name: '010_lista_lotou_marcador',
     sql: `
       alter table partida add column lista_lotou_em timestamptz;
+    `,
+  },
+  {
+    // Goleiro volta ao dominio (13/08/2026), agora como lista PROPRIA e
+    // SEPARADA da lista de linha - nunca ocupa vaga dos 18, more em
+    // handlers.ts/inscricao.ts. `goleiro_contratado` distingue quem foi
+    // contratado por fora de quem veio como convidado de um fixo; so faz
+    // sentido em posicao='gol', dai a constraint.
+    name: '011_goleiro_lista_propria',
+    sql: `
+      alter table partida alter column vagas_goleiro set default 2;
+      update partida set vagas_goleiro = 2 where fecha_em > now();
+
+      alter table inscricao
+        add column goleiro_contratado boolean not null default false;
+      alter table inscricao
+        add constraint inscricao_contratado_so_gol
+        check (goleiro_contratado = false or posicao = 'gol');
     `,
   },
 ];

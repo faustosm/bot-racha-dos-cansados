@@ -1,4 +1,4 @@
-import type { ItemLista, Partida, Posicao } from './tipos.js';
+import type { ItemGoleiro, ItemLista, Partida, Posicao } from './tipos.js';
 
 // Tudo aqui e funcao pura: recebe os itens ja carregados e devolve texto.
 // Sem banco e sem HTTP, o que torna o formato testavel com node --test.
@@ -42,6 +42,17 @@ export function motivoDaRecusa(
   return livres <= 0
     ? `A lista está completa (${partida.vagas_total} jogadores de linha).`
     : `Só resta${livres === 1 ? '' : 'm'} ${livres} vaga${livres === 1 ? '' : 's'}.`;
+}
+
+/** Por que um goleiro nao pode entrar, se nao puder. Teto proprio, separado da linha. */
+export function motivoRecusaGoleiro(
+  ocupados: number,
+  vagasGoleiro: number,
+): string | undefined {
+  if (ocupados < vagasGoleiro) return undefined;
+  return vagasGoleiro === 1
+    ? 'A vaga de goleiro já está ocupada.'
+    : `As ${vagasGoleiro} vagas de goleiro já estão ocupadas.`;
 }
 
 const DIAS = [
@@ -89,6 +100,11 @@ function linhaItem(
   return `${String(indice).padStart(2, ' ')}. ${item.nome} — ${origem}`;
 }
 
+/** "Fulano (contratado)" ou "Fulano (convidado de Alexson)". */
+function linhaGoleiro(g: ItemGoleiro): string {
+  return `${g.nome} (${g.contratado ? 'contratado' : `convidado de ${g.convidadoDe ?? '?'}`})`;
+}
+
 /**
  * Lista completa para mandar no grupo.
  *
@@ -96,10 +112,13 @@ function linhaItem(
  * criado_em). Nao separar por linha/gol e proposital: o grupo usa a ordem para
  * saber quem chegou primeiro e quem chegou por ultimo, e duas numeracoes
  * paralelas destruiriam essa leitura.
+ *
+ * Goleiro e lista PROPRIA, a parte - nunca entra na numeracao nem no X/18.
  */
 export function formatarLista(
   partida: Pick<Partida, 'data_jogo' | 'vagas_total'>,
   itens: readonly ItemLista[],
+  goleiros: readonly ItemGoleiro[] = [],
   nomeDoRacha = 'Racha',
 ): string {
   const vagas = contarVagas(itens, partida.vagas_total);
@@ -128,7 +147,9 @@ export function formatarLista(
     // ficar claro que sao dois times diferentes de gente, ou membros com mais
     // dificuldade de leitura entendem que a lista inclui goleiro.
     `${vagas.ocupadas}/${vagas.total} de linha.`,
-    'Os 2 goleiros são contratados à parte — não entram nesse número.',
+    goleiros.length
+      ? `🧤 Goleiros: ${goleiros.map(linhaGoleiro).join(', ')}.`
+      : '🧤 Goleiro: nenhum confirmado ainda.',
   );
   return partes.join('\n');
 }

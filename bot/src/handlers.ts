@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import { sendText } from './evolution/client.js';
-import { parse, separarNomes } from './commands/parse.js';
+import { normalizar, parse, separarNomes } from './commands/parse.js';
 import type { Intencao } from './commands/parse.js';
 import * as conversa from './conversa.js';
 import {
@@ -8,6 +8,8 @@ import {
   confirmarFixo,
   desistir,
   listar,
+  listarGoleiros,
+  normalizarNome,
   removerConvidado,
   restaurarInscricao,
 } from './domain/inscricao.js';
@@ -15,8 +17,8 @@ import { resolver } from './domain/jogador.js';
 import {
   convidadosLiberados,
   definirStatus,
+  diaDeAvisarSaida,
   listaAberta,
-  marcarListaLotou,
   partidaAtual,
   partidaParaLeitura,
   partidaPorEnquete,
@@ -190,7 +192,6 @@ async function sincronizarStatus(
   // corrida entre duas confirmacoes, uma so ganha - e so ela anuncia.
   const lotouAgora =
     vagas.livres === 0 ? await definirStatus(partida.id, 'cheia') : false;
-  if (lotouAgora) await marcarListaLotou(partida.id);
 
   if (vagas.livres > 0) await definirStatus(partida.id, 'aberta');
 
@@ -209,6 +210,7 @@ async function publicarLista(
   cabecalho: string,
 ): Promise<void> {
   const itens = await listar(partida.id);
+  const goleiros = await listarGoleiros(partida.id);
   const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
 
@@ -217,7 +219,7 @@ async function publicarLista(
     [
       cabecalho,
       '',
-      formatarLista(partida, itens, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
       'Para entrar ou sair, responda na enquete do racha 👆',
@@ -248,22 +250,20 @@ async function registrarEntrada(
 /**
  * Registra uma SAIDA.
  *
- * Aviso de saida CONGELADO por decisao (12/08/2026): ainda em observacao de
- * como o grupo e o bot se comportam, mesmo com a lista ja lotada. Ate
- * descongelar, so sincroniza status/lista_lotou_em em silencio - o digest das
- * 19:00 continua sendo o unico jeito do grupo ver quem saiu.
- *
- * Para reativar: trocar o corpo por
- *   if (!partida.lista_lotou_em) return;
- *   await publicarLista(ctx, partida, cabecalho);
+ * So publica sexta ou sabado (decisao de 13/08/2026): e quando uma vaga
+ * liberada ainda da tempo de repor alguem antes do jogo. Quarta/quinta fica
+ * em silencio - o digest das 19:00 ja cobre, e sobra a semana inteira pra
+ * reposicao.
  */
 async function registrarSaida(
-  _ctx: Sessao,
+  ctx: Sessao,
   partida: Partida,
-  _cabecalho: string,
+  cabecalho: string,
 ): Promise<void> {
   const itens = await listar(partida.id);
   await sincronizarStatus(partida, itens);
+  if (!diaDeAvisarSaida()) return;
+  await publicarLista(ctx, partida, cabecalho);
 }
 
 // ---------------------------------------------------------------------------
@@ -271,37 +271,93 @@ async function registrarSaida(
 // ---------------------------------------------------------------------------
 
 /**
- * Registra os convidados de uma vez.
+ * Recebe os nomes e pergunta se algum e goleiro antes de cadastrar.
  *
- * Sem pergunta de posicao: todos sao de linha, porque os goleiros vem
- * contratados por fora e o bot nao os controla. Antes eram duas perguntas por
- * convidado; agora e uma so, com os nomes na mesma mensagem.
+ * Goleiro e lista PROPRIA (nunca ocupa vaga de linha) - sem essa pergunta um
+ * convidado goleiro entrava como linha e comia vaga que nao e dele (foi o que
+ * aconteceu com um convidado em 12/08/2026, corrigido na mao).
  */
 async function iniciarConvidados(
   ctx: Sessao,
   partida: Partida,
   nomes: readonly string[],
 ): Promise<void> {
-  await conversa.limpar(ctx.jogadorId);
+  await conversa.salvar(
+    ctx.jogadorId,
+    partida.id,
+    'aguardando_posicao_convidados',
+    { nomesPendentes: nomes },
+  );
+  await noPrivado(
+    ctx,
+    [
+      'Todos de linha, ou tem goleiro entre eles?',
+      'Se tiver, manda o nome de quem é goleiro. Se não, responda "linha".',
+    ].join('\n'),
+  );
+}
 
+/** Cadastra um lote de convidados de LINHA e resume o que entrou. */
+async function registrarConvidadosLinha(
+  ctx: Sessao,
+  partida: Partida,
+  nomes: readonly string[],
+): Promise<void> {
   const entraram: string[] = [];
   for (const nome of nomes) {
     const r = await adicionarConvidado(partida, ctx.jogadorId, nome, 'linha');
     if (r.ok) entraram.push(nome);
     else await noPrivado(ctx, `${nome}: ${r.motivo}`);
   }
-  await fecharRodada(ctx, partida, entraram);
-}
-
-/** Encerra a rodada de convidados e resume o que entrou. */
-async function fecharRodada(
-  ctx: Sessao,
-  partida: Partida,
-  entraram: readonly string[],
-): Promise<void> {
   if (!entraram.length) return;
   await noPrivado(ctx, `Anotado: ${entraram.join(', ')}.`, { rodape: true });
   await registrarEntrada(ctx, partida);
+}
+
+/** Pergunta se o proximo goleiro da fila e contratado ou convidado. */
+async function perguntarTipoGoleiro(
+  ctx: Sessao,
+  partida: Partida,
+  nome: string,
+  filaRestante: readonly string[],
+): Promise<void> {
+  await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_tipo_goleiro', {
+    filaGoleiros: [nome, ...filaRestante],
+  });
+  await noPrivado(
+    ctx,
+    `${nome} é contratado (por fora) ou é seu convidado mesmo?`,
+  );
+}
+
+/**
+ * Cadastra um goleiro (contratado ou convidado) e segue pra proxima da fila,
+ * se houver mais de um apontado na mesma rodada.
+ */
+async function registrarGoleiro(
+  ctx: Sessao,
+  partida: Partida,
+  nome: string,
+  contratado: boolean,
+  filaRestante: readonly string[],
+): Promise<void> {
+  const r = await adicionarConvidado(partida, ctx.jogadorId, nome, 'gol', {
+    contratado,
+  });
+  await noPrivado(
+    ctx,
+    r.ok
+      ? `Anotado: ${nome} — goleiro (${contratado ? 'contratado' : 'convidado'}).`
+      : `${nome}: ${r.motivo}`,
+    { rodape: true },
+  );
+
+  const [proximo, ...resto] = filaRestante;
+  if (proximo) {
+    await perguntarTipoGoleiro(ctx, partida, proximo, resto);
+    return;
+  }
+  await conversa.limpar(ctx.jogadorId);
 }
 
 async function continuarDialogo(
@@ -350,6 +406,70 @@ async function continuarDialogo(
       return;
     }
     await iniciarConvidados(ctx, partida, nomes);
+    return;
+  }
+
+  if (conv.estado === 'aguardando_posicao_convidados') {
+    const pendentes = conv.dados.nomesPendentes ?? [];
+    const t = normalizar(ctx.texto);
+
+    // "não"/"nenhum" (negativa) ou "linha"/"todos" direto: ninguem e goleiro.
+    const todosDeLinha =
+      intencao?.tipo === 'negativa' || t === 'linha' || t === 'todos';
+    if (todosDeLinha) {
+      await conversa.limpar(ctx.jogadorId);
+      await registrarConvidadosLinha(ctx, partida, pendentes);
+      return;
+    }
+
+    // Com 1 convidado so, "goleiro"/"gol" sozinho ja basta - nao precisa
+    // repetir o nome que acabou de mandar.
+    const goleiros =
+      pendentes.length === 1 && /\bgol(eiro)?\b/.test(t)
+        ? [...pendentes]
+        : pendentes.filter((nome) =>
+            separarNomes(ctx.texto)
+              .map(normalizarNome)
+              .includes(normalizarNome(nome)),
+          );
+
+    if (!goleiros.length) {
+      await noPrivado(
+        ctx,
+        [
+          `Não entendi. Os convidados são: ${pendentes.join(', ')}.`,
+          'Responda "linha" se todos forem de linha, ou o nome de quem é goleiro.',
+        ].join('\n'),
+      );
+      return;
+    }
+
+    const linha = pendentes.filter((nome) => !goleiros.includes(nome));
+    await conversa.limpar(ctx.jogadorId);
+    if (linha.length) await registrarConvidadosLinha(ctx, partida, linha);
+
+    const [primeiro, ...resto] = goleiros;
+    if (primeiro) await perguntarTipoGoleiro(ctx, partida, primeiro, resto);
+    return;
+  }
+
+  if (conv.estado === 'aguardando_tipo_goleiro') {
+    const [atual, ...resto] = conv.dados.filaGoleiros ?? [];
+    if (!atual) {
+      await conversa.limpar(ctx.jogadorId);
+      return;
+    }
+
+    const t = normalizar(ctx.texto);
+    if (t.includes('contratad')) {
+      await registrarGoleiro(ctx, partida, atual, true, resto);
+      return;
+    }
+    if (t.includes('convidad')) {
+      await registrarGoleiro(ctx, partida, atual, false, resto);
+      return;
+    }
+    await noPrivado(ctx, `Não entendi. ${atual} é "contratado" ou "convidado"?`);
     return;
   }
 
@@ -463,12 +583,13 @@ async function tratarConfirmar(ctx: Sessao, partida: Partida): Promise<void> {
 /**
  * @param opcoes.origemVoto true quando veio de um voto na enquete do grupo.
  *
- * A distincao importa: acionado por VOTO, qualquer mensagem no privado e
- * conversa que o BOT inicia - tem que passar pela fila e respeitar quem pediu
- * silencio. Acionado por texto no privado, e resposta, e sai direto.
+ * A distincao importa: acionado por VOTO (ex.: pergunta sobre convidados
+ * orfaos), qualquer mensagem no privado e conversa que o BOT inicia - tem que
+ * passar pela fila e respeitar quem pediu silencio. Acionado por texto no
+ * privado, e resposta, e sai direto.
  *
- * Sem isso, votar "Nao vou" sem estar na lista mandava DM fria para quem nunca
- * falou com o bot, furando a protecao que o resto do codigo mantem.
+ * Quem tenta sair sem ter inscricao ativa (nunca confirmou, ou ja tinha saido)
+ * fica em silencio - nao ha nada de errado nisso, nao precisa de aviso.
  */
 async function tratarDesistir(
   ctx: Sessao,
@@ -481,10 +602,7 @@ async function tratarDesistir(
   };
 
   const r = await desistir(partida, ctx.jogadorId);
-  if (!r.ok) {
-    falarNoPrivado(r.motivo);
-    return;
-  }
+  if (!r.ok) return; // nao estava na lista - tudo bem, sem aviso
 
   await conversa.limpar(ctx.jogadorId);
 
@@ -759,12 +877,12 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
 
   if (!comConvidado) return;
 
-  // Antes de quinta 12:00 a vaga de convidado nem existe. Avisa e nao abre
-  // conversa: quem quiser insiste votando de novo depois que abrir.
+  // Antes de quinta 12:00 a vaga de convidado nem existe. Avisa no privado e
+  // nao abre conversa: quem quiser insiste votando de novo depois que abrir.
   if (!convidadosLiberados(partida)) {
-    await avisarGrupo(
+    puxarConversa(
       ctx,
-      `⏳ ${ctx.nomeNaLista}, convidado só a partir de quinta ao meio-dia. Vote de novo depois que abrir que eu te chamo.`,
+      '⏳ Convidado só a partir de quinta ao meio-dia. Vote de novo depois que abrir que eu te chamo.',
     );
     return;
   }
@@ -838,7 +956,8 @@ async function tratarNoGrupo(entrada: Contexto): Promise<void> {
   if (!partida) return; // Nenhum racha jamais criado: silencio.
 
   const itens = await listar(partida.id);
-  await mandar(formatarLista(partida, itens, config.RACHA_NOME));
+  const goleiros = await listarGoleiros(partida.id);
+  await mandar(formatarLista(partida, itens, goleiros, config.RACHA_NOME));
 }
 
 export async function tratarMensagem(entrada: Contexto): Promise<void> {
@@ -934,7 +1053,10 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
 
   if (intencao.tipo === 'lista') {
     const itens = await listar(partida.id);
-    await noPrivado(ctx, formatarLista(partida, itens, config.RACHA_NOME), { rodape: true });
+    const goleiros = await listarGoleiros(partida.id);
+    await noPrivado(ctx, formatarLista(partida, itens, goleiros, config.RACHA_NOME), {
+      rodape: true,
+    });
     return;
   }
 

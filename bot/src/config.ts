@@ -29,10 +29,10 @@ const schema = z.object({
   RACHA_HORARIO: z.string().default('09:00 às 11:00'),
 
   // --- Regras do racha -----------------------------------------------------
-  // A lista e SO de jogadores de linha. Os 2 goleiros sao contratados por fora
-  // e o bot nao os gerencia - eles aparecem apenas como texto nas mensagens,
-  // para o grupo entender que 18 na lista + 2 goleiros = time completo.
+  // A lista de linha e separada da lista de goleiro (13/08/2026): goleiro tem
+  // teto proprio (VAGAS_GOLEIRO) e nunca ocupa vaga dos 18.
   VAGAS_TOTAL: z.coerce.number().int().positive().default(18),
+  VAGAS_GOLEIRO: z.coerce.number().int().nonnegative().default(2),
 
   // Cron do agendador (horario local do container, TZ=America/Sao_Paulo).
   CRON_ABRE_FIXOS: z.string().default('0 12 * * 3'), // quarta 12:00

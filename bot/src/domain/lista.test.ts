@@ -68,14 +68,23 @@ describe('formatarLista', () => {
     assert.match(texto, /3\. Terceiro/);
   });
 
-  it('deixa claro que os goleiros vem por fora, em frase separada', () => {
+  it('goleiro fica numa secao separada, fora do X/18', () => {
     // Regressao: "X/18 · goleiros por fora" numa linha so dava a entender
     // que os goleiros contavam dentro do X/18.
     const itens = Array.from({ length: 12 }, (_, i) => fixo(i, `J${i}`));
     const texto = formatarLista(partida, itens);
     assert.match(texto, /12\/18 de linha\./);
-    assert.match(texto, /goleiros são contratados à parte/);
-    assert.match(texto, /não entram nesse número/);
+    assert.match(texto, /nenhum confirmado ainda/);
+  });
+
+  it('lista goleiro contratado e convidado, cada um com seu rotulo', () => {
+    const itens = [fixo(1, 'Fausto')];
+    const goleiros = [
+      { id: 10, nome: 'Ricardo', contratado: true },
+      { id: 11, nome: 'Marcos', contratado: false, convidadoDe: 'Fausto' },
+    ];
+    const texto = formatarLista(partida, itens, goleiros);
+    assert.match(texto, /🧤 Goleiros: Ricardo \(contratado\), Marcos \(convidado de Fausto\)\./);
   });
 
   it('nao quebra com a lista vazia', () => {

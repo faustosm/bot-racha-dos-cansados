@@ -7,8 +7,7 @@ export { isoDate, janelas, proximoSabado } from './datas.js';
 
 const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
                  vagas_total, vagas_goleiro, status,
-                 enquete_id, enquete_segredo, enquete_criador, encerrada_em,
-                 lista_lotou_em`;
+                 enquete_id, enquete_segredo, enquete_criador, encerrada_em`;
 
 /**
  * Cria a partida do proximo sabado se ainda nao existir. Idempotente: o
@@ -21,7 +20,7 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
   const criada = await queryOne<Partida>(
     `insert into partida
        (data_jogo, abre_fixos, abre_convidados, fecha_em, vagas_total, vagas_goleiro)
-     values ($1, $2, $3, $4, $5, 0)
+     values ($1, $2, $3, $4, $5, $6)
      on conflict (data_jogo) do nothing
      returning ${COLUNAS}`,
     [
@@ -30,6 +29,7 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
       abreConvidados,
       fechaEm,
       config.VAGAS_TOTAL,
+      config.VAGAS_GOLEIRO,
     ],
   );
   if (criada) return criada;
@@ -134,14 +134,6 @@ export async function marcarEncerrada(id: number): Promise<void> {
   await query('update partida set encerrada_em = now() where id = $1', [id]);
 }
 
-/** Marca o instante em que a lista bateu o total de vagas. So a 1a vez conta. */
-export async function marcarListaLotou(id: number): Promise<void> {
-  await query(
-    'update partida set lista_lotou_em = now() where id = $1 and lista_lotou_em is null',
-    [id],
-  );
-}
-
 export async function definirStatus(
   id: number,
   status: StatusPartida,
@@ -163,6 +155,16 @@ export function convidadosLiberados(
   agora = new Date(),
 ): boolean {
   return agora >= new Date(partida.abre_convidados);
+}
+
+/**
+ * Sexta e sabado: ultimos dias com tempo de repor quem desistiu antes do
+ * jogo. Quarta e quinta ainda sobra a semana inteira - avisar toda saida
+ * nesses dias so polui o grupo a toa (o digest das 19h ja cobre).
+ */
+export function diaDeAvisarSaida(agora = new Date()): boolean {
+  const dia = agora.getDay();
+  return dia === 5 || dia === 6;
 }
 
 export function listaAberta(partida: Partida, agora = new Date()): boolean {
