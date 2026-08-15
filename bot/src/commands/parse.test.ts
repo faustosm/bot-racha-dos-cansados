@@ -28,9 +28,22 @@ describe('parse - confirmar', () => {
   }
 
   it('"vou de gol" tambem so confirma presenca', () => {
-    // Goleiro saiu do bot: os 2 sao contratados por fora e nao ocupam vaga.
-    // A frase continua valendo como confirmacao para nao quebrar quem digita.
+    // Fixo nao se auto-marca goleiro (decisao deliberada, nao ha pergunta de
+    // posicao aqui) - a frase continua valendo como confirmacao de linha para
+    // nao quebrar quem digita.
     assert.deepEqual(parse('vou de gol'), { tipo: 'confirmar' });
+  });
+});
+
+describe('parse - nao perturbe', () => {
+  it('"nao perturbe" desliga as mensagens que o bot inicia', () => {
+    assert.deepEqual(parse('não perturbe'), { tipo: 'nao_perturbe' });
+    assert.deepEqual(parse('para de me chamar'), { tipo: 'nao_perturbe' });
+  });
+
+  it('"pode chamar" religa', () => {
+    assert.deepEqual(parse('pode chamar'), { tipo: 'pode_chamar' });
+    assert.deepEqual(parse('volta a chamar'), { tipo: 'pode_chamar' });
   });
 });
 

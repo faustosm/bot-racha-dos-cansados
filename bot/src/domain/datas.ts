@@ -28,9 +28,13 @@ function emDia(dataJogo: string, deltaDias: number, hora: number): Date {
 /** Hora em que a lista fecha no sabado. Duas horas antes da bola rolar. */
 export const HORA_FECHA = 7;
 
+/** Hora do encerramento (avaliacao pos-jogo), depois do jogo acabar. */
+export const HORA_ENCERRAMENTO = 12;
+
 /**
- * As tres janelas de uma partida, derivadas da data do jogo:
- * quarta 12:00 (fixos), quinta 12:00 (convidados), sabado 07:00 (fecha).
+ * As quatro janelas de uma partida, derivadas da data do jogo:
+ * quarta 12:00 (fixos), quinta 12:00 (convidados), sabado 07:00 (fecha,
+ * 2h antes do jogo), sabado 12:00 (encerra, depois do jogo).
  *
  * Fecha antes do jogo de proposito: quem organiza precisa da lista definitiva
  * com antecedencia para completar time ou cancelar, nao no minuto do apito.
@@ -39,10 +43,22 @@ export function janelas(dataJogo: string): {
   abreFixos: Date;
   abreConvidados: Date;
   fechaEm: Date;
+  encerraEm: Date;
 } {
   return {
     abreFixos: emDia(dataJogo, -3, 12),
     abreConvidados: emDia(dataJogo, -2, 12),
     fechaEm: emDia(dataJogo, 0, HORA_FECHA),
+    encerraEm: emDia(dataJogo, 0, HORA_ENCERRAMENTO),
   };
+}
+
+/**
+ * Ate quando a avaliacao pos-jogo aceita nota: a mesma quarta 12:00 em que a
+ * PROXIMA partida abre pros fixos (4 dias depois do sabado do jogo avaliado).
+ * Escolhido de proposito para casar com o fixa/desfixa manual da enquete no
+ * grupo - quando a nova enquete de confirmacao sobe, a de nota ja fechou.
+ */
+export function janelaAvaliacao(dataJogo: string): Date {
+  return emDia(dataJogo, 4, HORA_ENCERRAMENTO);
 }

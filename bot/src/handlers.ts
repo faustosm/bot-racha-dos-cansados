@@ -13,8 +13,9 @@ import {
   removerConvidado,
   restaurarInscricao,
 } from './domain/inscricao.js';
-import { resolver } from './domain/jogador.js';
+import { definirNaoPerturbe, resolver } from './domain/jogador.js';
 import {
+  avaliacaoAberta,
   convidadosLiberados,
   definirStatus,
   diaDeAvisarSaida,
@@ -30,6 +31,13 @@ import {
   registrarVoto,
   votoAnterior,
 } from './domain/enquete.js';
+import {
+  OPCOES_AVALIACAO,
+  conviteAvaliacaoPorEnquete,
+  interpretarNota,
+  registrarAvaliacao,
+} from './domain/avaliacao.js';
+import type { ConviteAvaliacao } from './domain/avaliacao.js';
 import { decifrarVoto, opcoesEscolhidas } from './domain/voto.js';
 import type { Vagas } from './domain/lista.js';
 import { alertasDeVagas, contarVagas, formatarLista } from './domain/lista.js';
@@ -62,6 +70,8 @@ interface Sessao extends Contexto {
   readonly nomeNaLista: string;
   /** A pessoa ja escreveu para o bot alguma vez. */
   readonly falouNoPrivado: boolean;
+  /** Pediu para o bot nao puxar conversa por conta propria. */
+  readonly naoPerturbe: boolean;
 }
 
 /**
@@ -109,10 +119,12 @@ const AJUDA = [
   '  Me manda aqui: "João não vai mais"',
   '',
   'A lista tem 18 vagas — todas de linha.',
-  'Os 2 goleiros são contratados por fora, não entram aqui.',
+  'Goleiro é contratado por fora ou convidado de um fixo, lista à parte.',
   '',
   'AQUI NO PRIVADO você também pode:',
   '  "lista" — ver a lista completa',
+  '  "não perturbe" — eu paro de te chamar por conta própria',
+  '  ("pode chamar" religa)',
   '',
   'No grupo eu publico a lista às 19:00 e sempre que alguém sai.',
 ].join('\n');
@@ -148,11 +160,16 @@ async function noPrivado(
  * coisas existem pelo mesmo motivo: e aqui que mora o risco de o numero ser
  * derrubado, nao na resposta.
  *
- * Usado num unico lugar: depois do voto em "Vou com convidado", para perguntar
- * o nome de quem vai junto. E o unico momento em que o bot escreve primeiro.
+ * Usado num unico lugar aqui em handlers.ts: depois do voto em "Vou com
+ * convidado", para perguntar o nome de quem vai junto (scheduler.ts tem o
+ * outro caso de o bot escrever primeiro - os convites de avaliacao pos-jogo).
  */
 function puxarConversa(ctx: Sessao, texto: string): void {
-  enfileirar(ctx.log, { para: ctx.jidPrivado, texto });
+  if (ctx.naoPerturbe) {
+    ctx.log.info({ jogadorId: ctx.jogadorId }, 'nao_perturbe: mensagem nao enviada');
+    return;
+  }
+  enfileirar(ctx.log, { tipo: 'texto', para: ctx.jidPrivado, texto });
 }
 
 async function avisarGrupo(ctx: Sessao, texto: string): Promise<void> {
@@ -765,15 +782,40 @@ export interface VotoRecebido {
 }
 
 /**
- * Um voto na enquete do grupo. E o caminho principal de confirmacao: um toque,
- * sem sair da conversa, sem o bot precisar escrever para ninguem.
+ * Um voto de enquete pode ser da enquete de CONFIRMACAO (grupo, uma por
+ * partida) ou de um CONVITE de AVALIACAO (privado, um por jogador - ver
+ * domain/avaliacao.ts). Descobre qual e antes de decifrar.
  */
-export async function tratarVoto(v: VotoRecebido): Promise<void> {
+export async function tratarVotoDeEnquete(v: VotoRecebido): Promise<void> {
   if (!v.enqueteId || !v.criadorJid || !v.votanteLid) return;
 
-  const partida = await partidaPorEnquete(v.enqueteId);
-  if (!partida?.enquete_segredo) {
-    v.log.info({ enqueteId: v.enqueteId }, 'voto de enquete desconhecida');
+  const partidaConfirmacao = await partidaPorEnquete(v.enqueteId);
+  if (partidaConfirmacao?.enquete_segredo) {
+    await tratarVotoConfirmacao(partidaConfirmacao, v);
+    return;
+  }
+
+  const convite = await conviteAvaliacaoPorEnquete(v.enqueteId);
+  if (convite) {
+    await tratarVotoAvaliacao(convite, v);
+    return;
+  }
+
+  v.log.info({ enqueteId: v.enqueteId }, 'voto de enquete desconhecida');
+}
+
+/**
+ * Um voto na enquete de CONFIRMACAO do grupo. E o caminho principal de
+ * confirmacao: um toque, sem sair da conversa, sem o bot precisar escrever
+ * para ninguem.
+ */
+async function tratarVotoConfirmacao(
+  partida: Partida,
+  v: VotoRecebido,
+): Promise<void> {
+  // Repete a guarda do despachante: cada handler fica seguro de chamar por
+  // conta propria, sem depender de o TypeScript enxergar a checagem alheia.
+  if (!v.enqueteId || !v.criadorJid || !v.votanteLid || !partida.enquete_segredo) {
     return;
   }
 
@@ -829,6 +871,7 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
     jogadorId: jogador.id,
     nomeNaLista: jogador.nome,
     falouNoPrivado: jogador.falouNoPrivado,
+    naoPerturbe: jogador.naoPerturbe,
   };
 
   const anterior = await votoAnterior(partida.id, ctx.jogadorId);
@@ -902,6 +945,59 @@ export async function tratarVoto(v: VotoRecebido): Promise<void> {
       '',
       '("cancelar" se mudou de ideia)',
     ].join('\n'),
+  );
+}
+
+/**
+ * Um voto no CONVITE individual de avaliacao (nota 0-5 pos-jogo, enviado no
+ * privado so para quem efetivamente jogou - ver `encerrarPartida` em
+ * scheduler.ts). Mais simples que a confirmacao: como o convite ja nasce
+ * vinculado a UM jogador especifico (`criarConviteAvaliacao`), nao precisa
+ * decidir quem e elegivel aqui - so decifrar com o segredo daquele convite e
+ * gravar. `resolver()` nao entra nesse caminho.
+ *
+ * Silencioso de proposito: nota nao gera anuncio nenhum, so entra na media
+ * mensal, futuramente.
+ */
+async function tratarVotoAvaliacao(
+  convite: ConviteAvaliacao,
+  v: VotoRecebido,
+): Promise<void> {
+  if (!v.enqueteId || !v.criadorJid || !v.votanteLid) return;
+
+  const hashes = decifrarVoto(
+    { encPayload: v.encPayload, encIv: v.encIv },
+    {
+      enqueteId: v.enqueteId,
+      criadorJid: v.criadorJid,
+      votanteJid: v.votanteLid,
+      segredo: Uint8Array.from(Buffer.from(convite.enquete_segredo, 'base64')),
+    },
+  );
+  if (!hashes) {
+    v.log.warn({ enqueteId: v.enqueteId }, 'nao consegui decifrar a avaliacao');
+    return;
+  }
+
+  const escolhidas = opcoesEscolhidas(hashes, OPCOES_AVALIACAO);
+  if (!escolhidas.length) return; // desmarcou tudo
+
+  const nota = interpretarNota(escolhidas[0] ?? '');
+  if (nota === undefined) return;
+
+  const partida = await partidaPorId(convite.partida_id);
+  if (!partida || !avaliacaoAberta(partida)) {
+    v.log.info(
+      { partidaId: convite.partida_id },
+      'avaliacao fora da janela, ignorada',
+    );
+    return;
+  }
+
+  await registrarAvaliacao(convite.id, nota);
+  v.log.info(
+    { jogadorId: convite.jogador_id, nota, partidaId: convite.partida_id },
+    'avaliacao registrada',
   );
 }
 
@@ -997,18 +1093,35 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     jogadorId: jogador.id,
     nomeNaLista: jogador.nome,
     falouNoPrivado: jogador.falouNoPrivado,
+    naoPerturbe: jogador.naoPerturbe,
   };
+
+  const intencao: Intencao | undefined = parse(ctx.texto);
+
+  // Antes de qualquer coisa que dependa de racha aberto: a preferencia de
+  // silencio tem que valer mesmo sem partida em andamento (ex.: fora da
+  // janela semanal, entre o sabado e a proxima quarta).
+  if (intencao?.tipo === 'nao_perturbe') {
+    await definirNaoPerturbe(ctx.jogadorId, true);
+    await noPrivado(
+      ctx,
+      'Combinado — não te chamo mais por conta própria. Se eu perguntar algo e você não responder, ok. "pode chamar" religa quando quiser.',
+    );
+    return;
+  }
+  if (intencao?.tipo === 'pode_chamar') {
+    await definirNaoPerturbe(ctx.jogadorId, false);
+    await noPrivado(ctx, 'Beleza, volto a te chamar quando precisar.');
+    return;
+  }
 
   const partida = await partidaAtual();
   if (!partida) {
-    const intencao = parse(ctx.texto);
     if (intencao) {
       await noPrivado(ctx, 'Nenhum racha aberto no momento.');
     }
     return;
   }
-
-  const intencao: Intencao | undefined = parse(ctx.texto);
 
   // Dialogo em andamento tem prioridade - "linha" so significa alguma coisa
   // depois de o bot perguntar. A excecao sao os comandos de verdade: sem isso,

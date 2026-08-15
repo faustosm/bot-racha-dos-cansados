@@ -30,6 +30,12 @@ export interface Jogador {
    * com desconhecido, que e o que derruba o numero.
    */
   readonly falouNoPrivado: boolean;
+  /**
+   * Pediu para o bot parar de puxar conversa por conta propria.
+   *
+   * Nao afeta resposta a quem escreveu - so o que o bot INICIA (fila.ts).
+   */
+  readonly naoPerturbe: boolean;
 }
 
 interface LinhaJogador {
@@ -56,6 +62,7 @@ const paraJogador = (r: LinhaJogador): Jogador => ({
   telefone: r.telefone,
   nome: r.nome,
   falouNoPrivado: r.falou_no_privado,
+  naoPerturbe: r.nao_perturbe,
 });
 
 /**
@@ -154,6 +161,17 @@ export async function resolver(id: Identidade): Promise<Jogador> {
     const j = atualizado.rows[0];
     return j ? paraJogador(j) : paraJogador(vencedor);
   });
+}
+
+/** Liga/desliga a valvula de escape das mensagens que o bot inicia. */
+export async function definirNaoPerturbe(
+  jogadorId: number,
+  valor: boolean,
+): Promise<void> {
+  await query('update jogador set nao_perturbe = $2 where id = $1', [
+    jogadorId,
+    valor,
+  ]);
 }
 
 

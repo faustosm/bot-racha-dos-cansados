@@ -1,16 +1,23 @@
 import cron from 'node-cron';
 import { config } from './config.js';
 import { sendPoll, sendText } from './evolution/client.js';
-import { listar, listarGoleiros } from './domain/inscricao.js';
+import { listar, listarFixosConfirmados, listarGoleiros } from './domain/inscricao.js';
 import {
   definirStatus,
   fecharVencidas,
   garantirPartida,
+  marcarEncerrada,
+  partidaAEncerrar,
   partidaAtual,
   partidaParaLeitura,
   registrarEnquete,
 } from './domain/partida.js';
 import { OPCOES, tituloDaEnquete } from './domain/enquete.js';
+import {
+  OPCOES_AVALIACAO,
+  criarConviteAvaliacao,
+  tituloDaEnqueteAvaliacao,
+} from './domain/avaliacao.js';
 import { janelas, proximoSabado } from './domain/datas.js';
 import {
   alertasDeVagas,
@@ -19,6 +26,8 @@ import {
   rotuloData,
 } from './domain/lista.js';
 import { limparExpiradas } from './conversa.js';
+import { ehMembro } from './grupo.js';
+import { enfileirar } from './fila.js';
 
 export interface Log {
   info: (obj: unknown, msg: string) => void;
@@ -55,7 +64,7 @@ export async function anunciarAberturaFixos(
       ...(config.RACHA_ENDERECO ? [`📍 ${config.RACHA_ENDERECO}`] : []),
       '',
       `Lista aberta! ${partida.vagas_total} vagas de linha.`,
-      '🧤 Os 2 goleiros são contratados por fora, não entram na lista.',
+      `🧤 Goleiro (até ${partida.vagas_goleiro}) é convidado de quem já confirmou, ou contratado por fora — lista à parte.`,
       '',
       'Responda na enquete abaixo 👇',
     ].join('\n'),
@@ -152,10 +161,11 @@ async function abrirParaConvidados(log: Log): Promise<void> {
 }
 
 /**
- * Sabado 09:00 — fecha a lista e publica a final.
+ * Roda no horario de CRON_FECHA (sabado 07:00 por padrao, 2h antes do jogo)
+ * — fecha a lista e publica a final.
  *
- * Usa `partidaParaLeitura`, nao `partidaAtual`: as 09:00 em ponto o `fecha_em`
- * ja passou, e `partidaAtual` filtra por isso - com ela, a lista final nunca
+ * Usa `partidaParaLeitura`, nao `partidaAtual`: nesse horario o `fecha_em` ja
+ * passou, e `partidaAtual` filtra por isso - com ela, a lista final nunca
  * seria publicada.
  */
 async function fecharLista(log: Log): Promise<void> {
@@ -240,6 +250,122 @@ async function chamadaDeSexta(log: Log): Promise<void> {
 }
 
 /**
+ * Anuncio PUBLICO de que a avaliacao vai rolar - so avisa, nao e a enquete
+ * em si (essa vai individual, no privado, ver `enviarConvitesDeAvaliacao`).
+ * Tom de brincadeira de proposito (texto do Fausto) - o resto do bot e seco,
+ * mas essa e a unica mensagem pensada para arrancar risada do grupo.
+ */
+export function mensagemQualidade(): string {
+  return [
+    `⚽ DEPARTAMENTO DE QUALIDADE — ${config.RACHA_NOME}`,
+    '',
+    'O jogo de hoje foi encerrado com sucesso.',
+    '',
+    'Agora precisamos da avaliação dos jogadores que participaram. 📊',
+    '',
+    'Em alguns minutos, o bot enviará no privado uma avaliação para quem jogou hoje.',
+    '',
+    'Sua avaliação será utilizada para calcular o Índice de Qualidade do Racha e acompanhar a qualidade dos nossos jogos.',
+    '',
+    'O Departamento de Qualidade agradece sua colaboração. 😂⚽',
+  ].join('\n');
+}
+
+/**
+ * Manda o convite individual (enquete 0-5) para quem efetivamente jogou.
+ *
+ * "Efetivamente jogou" reusa a MESMA fonte de verdade da lista (fixo de
+ * linha confirmado, `listarFixosConfirmados` em domain/inscricao.ts) - sem
+ * segunda fonte paralela. Dois filtros a mais, por cima disso:
+ *
+ *  - `naoPerturbe`: convite tambem e mensagem que o bot INICIA, mesma regra
+ *    de `puxarConversa`.
+ *  - `ehMembro`: so manda para quem ainda esta no grupo agora. Isso e o que
+ *    faz alguem que saiu do grupo entre a confirmacao e o fim do jogo (ex.:
+ *    o caso do Ricardo/Ricarros Centro Automotivo em 15/08/2026) ficar de
+ *    fora SOZINHO, sem precisar de nenhuma excecao ou lista negra no codigo
+ *    - e so uma consequencia de nao estar mais no grupo.
+ */
+async function enviarConvitesDeAvaliacao(
+  log: Log,
+  partida: { id: number; data_jogo: string },
+): Promise<void> {
+  const fixos = await listarFixosConfirmados(partida.id);
+
+  for (const fixo of fixos) {
+    if (fixo.naoPerturbe) {
+      log.info(
+        { jogadorId: fixo.jogadorId },
+        'nao_perturbe: convite de avaliacao nao enviado',
+      );
+      continue;
+    }
+
+    const membro = await ehMembro(log, {
+      ...(fixo.lid ? { lid: fixo.lid } : {}),
+      ...(fixo.telefone ? { telefone: fixo.telefone } : {}),
+    });
+    if (!membro) {
+      log.info(
+        { jogadorId: fixo.jogadorId },
+        'nao e mais membro do grupo: convite de avaliacao nao enviado',
+      );
+      continue;
+    }
+
+    // Telefone, nao lid: e o formato que funciona para abrir um privado do
+    // zero (lid so resolve dentro do contexto de um grupo compartilhado).
+    if (!fixo.telefone) {
+      log.warn(
+        { jogadorId: fixo.jogadorId },
+        'sem telefone cadastrado: nao da para mandar convite de avaliacao',
+      );
+      continue;
+    }
+
+    enfileirar(log, {
+      tipo: 'enquete',
+      para: fixo.telefone,
+      titulo: tituloDaEnqueteAvaliacao(),
+      opcoes: OPCOES_AVALIACAO,
+      aoEnviar: async (enquete) => {
+        if (!enquete) {
+          log.warn(
+            { jogadorId: fixo.jogadorId },
+            'falha ao enviar convite de avaliacao',
+          );
+          return;
+        }
+        await criarConviteAvaliacao(partida.id, fixo.jogadorId, enquete);
+        log.info(
+          { jogadorId: fixo.jogadorId, enqueteId: enquete.id },
+          'convite de avaliacao enviado',
+        );
+      },
+    });
+  }
+}
+
+/**
+ * Sabado 12:00 (CRON_AVALIACAO) — o jogo ja acabou: avisa o grupo, manda os
+ * convites individuais e marca a partida como encerrada.
+ *
+ * So tenta UMA vez por partida (`partidaAEncerrar` filtra por
+ * `encerrada_em`): diferente de `abrirParaFixos`, aqui nao ha retentativa
+ * horaria indefinida se algum envio falhar - evita reenviar convite pra
+ * quem ja recebeu so porque outro falhou.
+ */
+async function encerrarPartida(log: Log): Promise<void> {
+  const partida = await partidaAEncerrar();
+  if (!partida) return;
+
+  log.info({ partida: partida.data_jogo }, 'encerrando racha, avaliacao pos-jogo');
+  await anunciar(log, mensagemQualidade());
+  await enviarConvitesDeAvaliacao(log, partida);
+  await marcarEncerrada(partida.id);
+}
+
+/**
  * Rede de seguranca: garante que a partida da semana exista.
  *
  * `garantirPartida` so era chamado no cron de quarta 12:00. Se o container
@@ -277,6 +403,7 @@ export function iniciarAgendador(log: Log): void {
     ['fecha', config.CRON_FECHA, () => fecharLista(log)],
     ['digest', config.CRON_DIGEST, () => digestDoDia(log)],
     ['chamada', config.CRON_CHAMADA, () => chamadaDeSexta(log)],
+    ['avaliacao', config.CRON_AVALIACAO, () => encerrarPartida(log)],
   ];
 
   for (const [nome, expressao, fn] of tarefas) {
@@ -303,6 +430,12 @@ export function iniciarAgendador(log: Log): void {
     recuperarAberturaPerdida(log).catch((err) =>
       log.warn({ err }, 'falha ao recuperar abertura perdida'),
     );
+    // `encerrarPartida` ja e idempotente por si so (`partidaAEncerrar` filtra
+    // por `encerra_em`/`encerrada_em`) - nao precisa do guard extra que
+    // `recuperarAberturaPerdida` tem para `abrirParaFixos`.
+    encerrarPartida(log).catch((err) =>
+      log.warn({ err }, 'falha ao encerrar partida/publicar avaliacao'),
+    );
   });
 
   // E no boot, para nao esperar ate a proxima hora cheia depois de um deploy.
@@ -313,5 +446,6 @@ export function iniciarAgendador(log: Log): void {
       if (n > 0) log.info({ partidas: n }, 'partidas vencidas fechadas no boot');
       return recuperarAberturaPerdida(log);
     })
+    .then(() => encerrarPartida(log))
     .catch((err) => log.warn({ err }, 'falha na faxina de boot'));
 }

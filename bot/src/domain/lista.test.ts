@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { cabeMais, contarVagas, formatarLista, rotuloData } from './lista.js';
-import { janelas, proximoSabado } from './datas.js';
+import { janelaAvaliacao, janelas, proximoSabado } from './datas.js';
 import type { ItemLista } from './tipos.js';
 
 const fixo = (id: number, nome: string): ItemLista => ({
@@ -9,6 +9,7 @@ const fixo = (id: number, nome: string): ItemLista => ({
   nome,
   tipo: 'fixo',
   posicao: 'linha',
+  jogadorId: id,
 });
 
 const convidado = (id: number, nome: string, de: string): ItemLista => ({
@@ -81,10 +82,20 @@ describe('formatarLista', () => {
     const itens = [fixo(1, 'Fausto')];
     const goleiros = [
       { id: 10, nome: 'Ricardo', contratado: true },
-      { id: 11, nome: 'Marcos', contratado: false, convidadoDe: 'Fausto' },
+      { id: 11, nome: 'Marcos', contratado: false, convidadoDe: 'Fausto', convidadoDeId: 1 },
     ];
     const texto = formatarLista(partida, itens, goleiros);
     assert.match(texto, /🧤 Goleiros: Ricardo \(contratado\), Marcos \(convidado de Fausto\)\./);
+  });
+
+  it('goleiro convidado avisa quando o anfitriao saiu, igual convidado de linha', () => {
+    // O anfitriao (id 7) NAO esta nos itens de linha: saiu e o goleiro ficou.
+    const itens = [fixo(9, 'Ana')];
+    const goleiros = [
+      { id: 20, nome: 'Marcos', contratado: false, convidadoDe: 'Fausto', convidadoDeId: 7 },
+    ];
+    const texto = formatarLista(partida, itens, goleiros);
+    assert.match(texto, /Marcos \(convidado — Fausto saiu\)/);
   });
 
   it('nao quebra com a lista vazia', () => {
@@ -128,5 +139,18 @@ describe('janelas', () => {
     assert.equal(j.fechaEm.getDay(), 6);
     // Fecha 2h antes do jogo (09:00), para dar tempo de completar o time.
     assert.equal(j.fechaEm.getHours(), 7);
+    // Encerra (avaliacao pos-jogo) sabado 12:00, depois do jogo acabar.
+    assert.equal(j.encerraEm.getDay(), 6);
+    assert.equal(j.encerraEm.getHours(), 12);
+  });
+});
+
+describe('janelaAvaliacao', () => {
+  it('aceita nota ate quarta 12:00 - mesmo horario em que a proxima partida abre pros fixos', () => {
+    const prazo = janelaAvaliacao('2026-08-08');
+    assert.equal(prazo.getDay(), 3);
+    assert.equal(prazo.getHours(), 12);
+    // 4 dias depois do sabado do jogo avaliado.
+    assert.equal(prazo.getDate(), 12);
   });
 });

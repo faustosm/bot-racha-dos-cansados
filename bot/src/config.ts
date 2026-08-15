@@ -39,6 +39,8 @@ const schema = z.object({
   CRON_ABRE_CONVIDADOS: z.string().default('0 12 * * 4'), // quinta 12:00
   CRON_FECHA: z.string().default('0 7 * * 6'), // sabado 07:00 - fecha a lista
   CRON_CHAMADA: z.string().default('0 8 * * 5'), // sexta 08:00 - chamada geral
+  // sabado 12:00 - encerra a partida e publica a enquete de avaliacao
+  CRON_AVALIACAO: z.string().default('0 12 * * 6'),
   // Quarta a sexta as 19:00 - unica hora em que o grupo recebe a lista sem que
   // nada tenha acontecido. Confirmacao nao gera mensagem; so saida gera.
   CRON_DIGEST: z.string().default('0 19 * * 3-5'),

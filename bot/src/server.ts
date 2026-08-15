@@ -1,9 +1,9 @@
 import Fastify from 'fastify';
 import { config, isGroupConfigured } from './config.js';
 import { migrate, pool } from './db.js';
-import { tratarMensagem, tratarVoto } from './handlers.js';
+import { tratarMensagem, tratarVotoDeEnquete } from './handlers.js';
 import { iniciarAgendador } from './scheduler.js';
-import { invalidarCache } from './grupo.js';
+import { invalidarCache, meuLid } from './grupo.js';
 
 const app = Fastify({
   logger: {
@@ -40,7 +40,11 @@ interface WebhookBody {
       extendedTextMessage?: { text?: string };
       // Voto de enquete. Vem CIFRADO: a Evolution nao decifra em grupo com LID.
       pollUpdateMessage?: {
-        pollCreationMessageKey?: { id?: string; participant?: string };
+        pollCreationMessageKey?: {
+          id?: string;
+          participant?: string;
+          remoteJid?: string;
+        };
         vote?: {
           encPayload?: Record<string, number>;
           encIv?: Record<string, number>;
@@ -102,14 +106,47 @@ async function handleMessagesUpsert(data: NonNullable<WebhookBody['data']>) {
 
   const isGroup = remoteJid.endsWith('@g.us');
 
+  // Reentrega da Evolution vale tanto para voto de enquete quanto para
+  // mensagem de texto - o dedupe cobre os dois antes de qualquer processamento.
+  if (jaProcessada(key?.id)) {
+    app.log.info({ id: key?.id }, 'mensagem repetida (reentrega), ignorando');
+    return;
+  }
+
   // Voto de enquete chega como mensagem sem texto, antes de qualquer parser.
+  //
+  // O par (criadorJid, votanteJid) usado na decifragem muda por completo
+  // conforme o canal - descoberto por tentativa e erro contra um voto real
+  // de cada tipo (mesma tecnica ja documentada em domain/voto.ts):
+  //
+  //   grupo:   criador = participant da chave da enquete (LID do bot NO
+  //            GRUPO); votante = participant/participantAlt do voto.
+  //   privado: `pollCreationMessageKey.participant` vem SEMPRE vazio (a
+  //            Evolution nao preenche "autor" numa conversa 1:1). A
+  //            combinacao que decifra e criador = LID do bot (achado via
+  //            `meuLid`, ver grupo.ts - nao vem em NENHUM campo do webhook
+  //            de enquete privada) e votante = `pollCreationMessageKey.
+  //            remoteJid`, que numa mensagem `fromMe: true` de 1:1 e o LID
+  //            de quem esta do outro lado da conversa.
   const votoDeEnquete = data.message?.pollUpdateMessage;
   if (votoDeEnquete) {
-    await tratarVoto({
+    const [votanteLid, votanteTelefone, criadorJid] = isGroup
+      ? [
+          key?.participant,
+          key?.participantAlt,
+          votoDeEnquete.pollCreationMessageKey?.participant,
+        ]
+      : [
+          votoDeEnquete.pollCreationMessageKey?.remoteJid,
+          remoteJid,
+          await meuLid(app.log),
+        ];
+
+    await tratarVotoDeEnquete({
       enqueteId: votoDeEnquete.pollCreationMessageKey?.id,
-      criadorJid: votoDeEnquete.pollCreationMessageKey?.participant,
-      votanteLid: key?.participant,
-      votanteTelefone: key?.participantAlt,
+      criadorJid,
+      votanteLid,
+      votanteTelefone,
       nome: data.pushName,
       encPayload: paraBytes(votoDeEnquete.vote?.encPayload),
       encIv: paraBytes(votoDeEnquete.vote?.encIv),
@@ -120,11 +157,6 @@ async function handleMessagesUpsert(data: NonNullable<WebhookBody['data']>) {
 
   const text = extractText(data).trim();
   if (!text) return;
-
-  if (jaProcessada(key?.id)) {
-    app.log.info({ id: key?.id }, 'mensagem repetida (reentrega), ignorando');
-    return;
-  }
 
   // No primeiro boot o GROUP_JID ainda esta vazio. Logamos o JID de qualquer
   // grupo que mande mensagem para voce copiar para o .env.

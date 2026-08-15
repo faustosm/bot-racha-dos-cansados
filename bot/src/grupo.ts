@@ -22,6 +22,8 @@ const TTL_MS = Number(process.env.GRUPO_CACHE_MS ?? String(10 * 60_000));
 
 interface Cache {
   readonly ids: ReadonlySet<string>;
+  /** O proprio LID do bot, achado na mesma lista (ver `meuLid`). */
+  readonly meuLid: string | undefined;
   readonly em: number;
 }
 
@@ -44,13 +46,16 @@ async function carregar(log: Log): Promise<Cache | undefined> {
   if (!participantes) return undefined;
 
   const ids = new Set<string>();
+  let meuLid: string | undefined;
+  const botTelefone = config.BOT_NUMERO ? `${config.BOT_NUMERO}@s.whatsapp.net` : undefined;
   for (const p of participantes) {
     if (p.lid) ids.add(p.lid);
     if (p.telefone) ids.add(p.telefone);
+    if (botTelefone && p.telefone === botTelefone) meuLid = p.lid;
   }
 
   log.info({ membros: participantes.length }, 'lista de membros atualizada');
-  return { ids, em: Date.now() };
+  return { ids, meuLid, em: Date.now() };
 }
 
 /**
@@ -80,4 +85,20 @@ export async function ehMembro(
     (identidade.lid !== undefined && cache.ids.has(identidade.lid)) ||
     (identidade.telefone !== undefined && cache.ids.has(identidade.telefone))
   );
+}
+
+/**
+ * O LID do proprio bot - achado na lista de participantes do grupo (mesmo
+ * `config.BOT_NUMERO`, so que no formato @lid). E o mesmo LID em qualquer
+ * conversa (grupo ou privado): a Evolution nao expoe isso em nenhum campo do
+ * webhook de enquete privada, entao esse e o unico jeito de descobrir.
+ *
+ * Necessario para decifrar voto de avaliacao (enquete individual no
+ * privado): a receita valida empiricamente e criador=LID / votante=LID, e o
+ * LID do criador (o bot) nao vem em `pollCreationMessageKey` fora de grupo.
+ */
+export async function meuLid(log: Log): Promise<string | undefined> {
+  const valido = cache && Date.now() - cache.em < TTL_MS;
+  if (!valido) cache = (await carregar(log)) ?? cache;
+  return cache?.meuLid;
 }

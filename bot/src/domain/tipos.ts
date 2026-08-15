@@ -20,6 +20,8 @@ export interface Partida {
   readonly enquete_criador: string | null;
   /** Quando o encerramento foi anunciado no grupo. Null = ainda nao foi. */
   readonly encerrada_em: Date | null;
+  /** Sabado 12:00 - quando a avaliacao pos-jogo dispara. Null em linhas antigas. */
+  readonly encerra_em: Date | null;
 }
 
 /** Uma vaga ocupada, ja com o nome resolvido para exibicao. */

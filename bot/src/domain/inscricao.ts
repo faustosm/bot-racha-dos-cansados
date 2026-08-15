@@ -89,6 +89,46 @@ export async function listarGoleiros(partidaId: number): Promise<ItemGoleiro[]> 
   }));
 }
 
+export interface FixoConfirmado {
+  readonly jogadorId: number;
+  readonly telefone: string | null;
+  readonly lid: string | null;
+  readonly naoPerturbe: boolean;
+}
+
+const SQL_FIXOS_CONFIRMADOS = `
+  select j.id as jogador_id, j.telefone, j.lid, j.nao_perturbe
+    from inscricao i
+    join jogador j on j.id = i.jogador_id
+   where i.partida_id = $1
+     and i.removido_em is null
+     and i.tipo = 'fixo'
+     and i.posicao = 'linha'
+`;
+
+/**
+ * Quem efetivamente jogou, para a avaliacao pos-jogo (ver scheduler.ts,
+ * `encerrarPartida`). Mesma fonte de verdade de `listar` (fixo de linha
+ * confirmado) - so que aqui interessa telefone/lid/nao_perturbe da PESSOA,
+ * nao o nome para exibir na lista.
+ */
+export async function listarFixosConfirmados(
+  partidaId: number,
+): Promise<FixoConfirmado[]> {
+  const rows = await query<{
+    jogador_id: number;
+    telefone: string | null;
+    lid: string | null;
+    nao_perturbe: boolean;
+  }>(SQL_FIXOS_CONFIRMADOS, [partidaId]);
+  return rows.map((r) => ({
+    jogadorId: r.jogador_id,
+    telefone: r.telefone,
+    lid: r.lid,
+    naoPerturbe: r.nao_perturbe,
+  }));
+}
+
 /**
  * Trava a partida e conta as vagas ocupadas dentro da transacao.
  *
@@ -141,12 +181,14 @@ export async function confirmarFixo(
       if (existente.posicao === posicao) {
         return ok({ posicao, jaEstava: true, novo: false });
       }
-      // Troca de posicao: precisa caber no teto de goleiros da nova posicao.
+      // Troca de posicao: precisa caber no teto da posicao de DESTINO, seja
+      // qual for - mesma checagem que toda entrada nova passa.
       const contagem = await contarComLock(client, partida.id);
-      if (posicao === 'gol') {
-        const motivoGol = motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro);
-        if (motivoGol) return erro<Confirmacao>(motivoGol);
-      }
+      const motivoTroca =
+        posicao === 'gol'
+          ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
+          : motivoDaRecusa(contagem.linha, partida, 1);
+      if (motivoTroca) return erro<Confirmacao>(motivoTroca);
       await client.query('update inscricao set posicao = $2 where id = $1', [
         existente.id,
         posicao,

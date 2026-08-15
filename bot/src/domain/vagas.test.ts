@@ -84,7 +84,8 @@ describe('motivoDaRecusa', () => {
     const m = motivoDaRecusa(18, p, 1);
     assert.match(m ?? '', /lista está completa/i);
     assert.match(m ?? '', /18 jogadores de linha/i);
-    // Goleiro saiu do bot: a recusa nao pode mandar procurar vaga de gol.
+    // Recusa de linha e sobre linha: nao pode confundir com o teto de gol,
+    // que e separado (motivoRecusaGoleiro).
     assert.doesNotMatch(m ?? '', /goleiro/i);
   });
 

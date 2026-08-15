@@ -28,8 +28,10 @@ export type AcaoDoVoto =
 /**
  * Traduz a opcao votada em acao de dominio.
  *
- * Nao ha opcao de goleiro porque goleiro nao existe para o bot: os 2 sao
- * contratados por fora e nao ocupam vaga. A lista e so de linha.
+ * Nao ha opcao de goleiro na enquete de proposito: quem confirma pela enquete
+ * e sempre um jogador de LINHA. Goleiro (contratado ou convidado de um fixo)
+ * tem lista propria e entra por outro caminho - ver domain/inscricao.ts e o
+ * dialogo de convidados em handlers.ts.
  */
 export function interpretar(opcao: string): AcaoDoVoto | undefined {
   switch (opcao) {

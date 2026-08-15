@@ -10,10 +10,9 @@ export interface Vagas {
 }
 
 /**
- * A lista e so de jogadores de linha.
- *
- * Os 2 goleiros sao contratados por fora e o bot nao os controla: nao ocupam
- * vaga, nao entram na contagem e nao aparecem na lista. A lista fecha em 18.
+ * Conta so os jogadores de LINHA - goleiro tem teto e contagem propria
+ * (`motivoRecusaGoleiro`, `listarGoleiros`) e nunca ocupa vaga da linha.
+ * A lista de linha fecha em 18.
  */
 export function contarVagas(
   itens: readonly ItemLista[],
@@ -100,9 +99,20 @@ function linhaItem(
   return `${String(indice).padStart(2, ' ')}. ${item.nome} — ${origem}`;
 }
 
-/** "Fulano (contratado)" ou "Fulano (convidado de Alexson)". */
-function linhaGoleiro(g: ItemGoleiro): string {
-  return `${g.nome} (${g.contratado ? 'contratado' : `convidado de ${g.convidadoDe ?? '?'}`})`;
+/**
+ * "Fulano (contratado)" ou "Fulano (convidado de Alexson)".
+ *
+ * Mesmo cuidado que `linhaItem` com o anfitriao que saiu: o anfitriao de um
+ * goleiro convidado e sempre um fixo de linha, entao `presentes` (calculado
+ * so a partir dos itens de linha) ja cobre esse caso.
+ */
+function linhaGoleiro(g: ItemGoleiro, presentes: ReadonlySet<number>): string {
+  if (g.contratado) return `${g.nome} (contratado)`;
+  const anfitriaoSaiu =
+    g.convidadoDeId !== undefined && !presentes.has(g.convidadoDeId);
+  return anfitriaoSaiu
+    ? `${g.nome} (convidado — ${g.convidadoDe ?? '?'} saiu)`
+    : `${g.nome} (convidado de ${g.convidadoDe ?? '?'})`;
 }
 
 /**
@@ -148,7 +158,7 @@ export function formatarLista(
     // dificuldade de leitura entendem que a lista inclui goleiro.
     `${vagas.ocupadas}/${vagas.total} de linha.`,
     goleiros.length
-      ? `🧤 Goleiros: ${goleiros.map(linhaGoleiro).join(', ')}.`
+      ? `🧤 Goleiros: ${goleiros.map((g) => linhaGoleiro(g, presentes)).join(', ')}.`
       : '🧤 Goleiro: nenhum confirmado ainda.',
   );
   return partes.join('\n');

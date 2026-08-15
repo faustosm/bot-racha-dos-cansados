@@ -19,7 +19,11 @@ export type Intencao =
   | { tipo: 'afirmativa' }
   | { tipo: 'cancelar' }
   | { tipo: 'negativa' }
-  | { tipo: 'ajuda' };
+  | { tipo: 'ajuda' }
+  /** Desliga mensagem que o bot inicia por conta propria (so no privado). */
+  | { tipo: 'nao_perturbe' }
+  /** Reverso de 'nao_perturbe'. */
+  | { tipo: 'pode_chamar' };
 
 /** minusculas, sem acento, sem pontuacao das pontas, espacos colapsados. */
 export function normalizar(texto: string): string {
@@ -111,6 +115,27 @@ const NEGATIVAS_DIALOGO = new Set([
   'no',
 ]);
 
+// Valvula de escape de verdade (05_nao_perturbe): frases explicitas, para nao
+// desligar o bot por engano com algo parecido dito de passagem.
+const NAO_PERTURBE = new Set([
+  'nao perturbe',
+  'para de me chamar',
+  'para de mandar mensagem',
+  'para de mandar mensagens',
+  'nao me chame mais',
+  'me deixa quieto',
+  'me deixa em paz',
+]);
+const PODE_CHAMAR = new Set([
+  'pode chamar',
+  'pode me chamar',
+  'volta a chamar',
+  'quero receber mensagem',
+  'quero receber mensagens',
+  'ativar mensagem',
+  'ativar mensagens',
+]);
+
 const LISTA = new Set(['lista', 'quem vai', 'lista?', 'como esta a lista']);
 // Sem "?" na lista: um "?" solto no grupo e conversa normal, nao pedido de
 // ajuda. E no privado nao faz falta - qualquer coisa que o bot nao entende ja
@@ -186,6 +211,9 @@ export function parse(textoOriginal: string): Intencao | undefined {
 
   if (AJUDA.has(t)) return { tipo: 'ajuda' };
 
+  if (NAO_PERTURBE.has(t)) return { tipo: 'nao_perturbe' };
+  if (PODE_CHAMAR.has(t)) return { tipo: 'pode_chamar' };
+
   // Desistir vem ANTES de confirmar: "nao vou" contem "vou".
   if (DESISTIR.has(t)) {
     // "nao" sozinho e ambiguo: no meio de um dialogo e uma negativa, nao uma
@@ -214,8 +242,10 @@ export function parse(textoOriginal: string): Intencao | undefined {
     return { tipo: 'quero_convidar' };
   }
 
-  // Todos sao de linha: os 2 goleiros vem contratados por fora e o bot nao os
-  // controla. Por isso nao ha "vou de gol" nem pergunta de posicao.
+  // "Vou" confirma sempre como LINHA - fixo nao se auto-marca goleiro, decisao
+  // deliberada (goleiro e sempre contratado por fora ou convidado de um fixo,
+  // ver dialogo de convidados). Por isso nao ha "vou de gol" nem pergunta de
+  // posicao aqui.
   // \b garante fronteira de palavra: "vouzinho" nao confirma presenca.
   if (/^(vou|eu vou|bora|confirmo)\b/.test(t)) return { tipo: 'confirmar' };
 

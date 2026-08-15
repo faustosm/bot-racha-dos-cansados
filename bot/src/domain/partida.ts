@@ -1,13 +1,18 @@
 import { query, queryOne } from '../db.js';
 import { config } from '../config.js';
-import { janelas, proximoSabado } from './datas.js';
+import { janelaAvaliacao, janelas, proximoSabado } from './datas.js';
 import type { Partida, StatusPartida } from './tipos.js';
 
-export { isoDate, janelas, proximoSabado } from './datas.js';
+export { isoDate, janelaAvaliacao, janelas, proximoSabado } from './datas.js';
 
+// avaliacao_enquete_id/segredo/criador (migration 012) nao entram aqui: a
+// partir da migration 013 a enquete de avaliacao passou a ser por PESSOA,
+// guardada em `avaliacao` - essas 3 colunas de `partida` ficaram sem leitor
+// (vestigio historico, mesmo caso de `lista_lotou_em`).
 const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
                  vagas_total, vagas_goleiro, status,
-                 enquete_id, enquete_segredo, enquete_criador, encerrada_em`;
+                 enquete_id, enquete_segredo, enquete_criador,
+                 encerrada_em, encerra_em`;
 
 /**
  * Cria a partida do proximo sabado se ainda nao existir. Idempotente: o
@@ -15,12 +20,13 @@ const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
  */
 export async function garantirPartida(agora = new Date()): Promise<Partida> {
   const dataJogo = proximoSabado(agora);
-  const { abreFixos, abreConvidados, fechaEm } = janelas(dataJogo);
+  const { abreFixos, abreConvidados, fechaEm, encerraEm } = janelas(dataJogo);
 
   const criada = await queryOne<Partida>(
     `insert into partida
-       (data_jogo, abre_fixos, abre_convidados, fecha_em, vagas_total, vagas_goleiro)
-     values ($1, $2, $3, $4, $5, $6)
+       (data_jogo, abre_fixos, abre_convidados, fecha_em, encerra_em,
+        vagas_total, vagas_goleiro)
+     values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (data_jogo) do nothing
      returning ${COLUNAS}`,
     [
@@ -28,6 +34,7 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
       abreFixos,
       abreConvidados,
       fechaEm,
+      encerraEm,
       config.VAGAS_TOTAL,
       config.VAGAS_GOLEIRO,
     ],
@@ -116,15 +123,18 @@ export async function registrarEnquete(
 }
 
 /**
- * A partida que ja aconteceu e ainda nao teve o encerramento anunciado.
+ * A partida que ja aconteceu e ainda nao teve o encerramento (avaliacao
+ * pos-jogo) anunciado.
  *
- * Guardar `encerrada_em` e o que impede o grupo de receber "acabou" duas vezes
- * quando o container reinicia perto do horario do cron.
+ * Filtra por `encerra_em`, nao por `fecha_em`: `fecha_em` e 2h ANTES do jogo
+ * (fechamento da lista), enquanto o encerramento e DEPOIS que a bola parou de
+ * rolar. Guardar `encerrada_em` e o que impede o grupo de receber a enquete
+ * de nota duas vezes quando o container reinicia perto do horario do cron.
  */
 export async function partidaAEncerrar(): Promise<Partida | undefined> {
   return queryOne<Partida>(
     `select ${COLUNAS} from partida
-      where fecha_em <= now() and encerrada_em is null
+      where encerra_em <= now() and encerrada_em is null
       order by data_jogo desc
       limit 1`,
   );
@@ -132,6 +142,15 @@ export async function partidaAEncerrar(): Promise<Partida | undefined> {
 
 export async function marcarEncerrada(id: number): Promise<void> {
   await query('update partida set encerrada_em = now() where id = $1', [id]);
+}
+
+/**
+ * Ate quando a avaliacao pos-jogo aceita nota - ver `janelaAvaliacao` em
+ * domain/datas.ts para o motivo do prazo (quarta 12:00, quando a proxima
+ * partida abre pros fixos).
+ */
+export function avaliacaoAberta(partida: Partida, agora = new Date()): boolean {
+  return agora < janelaAvaliacao(partida.data_jogo);
 }
 
 export async function definirStatus(

@@ -280,4 +280,59 @@ export const migrations: readonly Migration[] = [
         check (goleiro_contratado = false or posicao = 'gol');
     `,
   },
+  {
+    // Avaliacao pos-jogo ("Departamento de Qualidade", 14-15/08/2026): uma
+    // segunda enquete por partida, publicada depois que o jogo acaba. Precisa
+    // do proprio par id/segredo (enquete_id ja e da enquete de confirmacao) e
+    // de um horario proprio para disparar (`encerra_em`, sabado 12:00) -
+    // `fecha_em` e 2h ANTES do jogo, nao serve para isso.
+    //
+    // `avaliacao` guarda uma nota por jogador por partida - so quem tem
+    // jogador_id numa inscricao 'fixo' de linha confirmada entra na media
+    // (convidado e goleiro nao tem vinculo de identidade rastreavel hoje).
+    name: '012_avaliacao_do_racha',
+    sql: `
+      alter table partida add column encerra_em timestamptz;
+      alter table partida add column avaliacao_enquete_id      text;
+      alter table partida add column avaliacao_enquete_segredo text;
+      alter table partida add column avaliacao_enquete_criador text;
+
+      create index if not exists partida_por_enquete_avaliacao
+        on partida (avaliacao_enquete_id);
+
+      create table avaliacao (
+        id         serial primary key,
+        partida_id int  not null references partida(id) on delete cascade,
+        jogador_id int  not null references jogador(id) on delete cascade,
+        nota       int  not null check (nota between 0 and 5),
+        criado_em  timestamptz not null default now(),
+        unique (partida_id, jogador_id)
+      );
+    `,
+  },
+  {
+    // Pivot (15/08/2026): a avaliacao deixou de ser UMA enquete publica no
+    // grupo (por partida) e passou a ser uma enquete INDIVIDUAL no privado,
+    // uma por jogador que efetivamente jogou. Cada convite tem seu proprio
+    // par id/segredo, entao nao da mais para guardar isso em `partida` (uma
+    // coluna so serviria para uma pessoa). As 3 colunas avaliacao_enquete_*
+    // de `partida` (migration 012) ficam sem leitor a partir daqui - vestigio
+    // historico, mesmo caso de `lista_lotou_em` (migration 010).
+    //
+    // A linha em `avaliacao` agora nasce no ENVIO do convite (nota nula) e e
+    // completada quando o voto chega - por isso `nota` vira opcional.
+    name: '013_avaliacao_convite_individual',
+    sql: `
+      alter table avaliacao add column enquete_id      text;
+      alter table avaliacao add column enquete_segredo text;
+      alter table avaliacao add column enquete_criador text;
+
+      alter table avaliacao alter column nota drop not null;
+      alter table avaliacao drop constraint avaliacao_nota_check;
+      alter table avaliacao add constraint avaliacao_nota_check
+        check (nota is null or nota between 0 and 5);
+
+      create index if not exists avaliacao_por_enquete on avaliacao (enquete_id);
+    `,
+  },
 ];
