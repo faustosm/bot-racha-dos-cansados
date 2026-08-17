@@ -1,21 +1,24 @@
 /**
- * Ferramenta de TESTE (nao roda em producao).
+ * Ferramenta manual (nao roda em producao/agendador).
  *
  * Manda UM convite individual de avaliacao (enquete 0-5) pro numero indicado,
  * criando o convite de verdade (`avaliacao`, com enquete_id/segredo) preso a
- * uma partida real - assim, quando a pessoa votar, o webhook cai no MESMO
- * caminho de producao (`tratarVotoDeEnquete` -> `tratarVotoAvaliacao`) e da
- * para conferir se a nota realmente grava.
+ * partida mais recente - assim, quando a pessoa votar, o webhook cai no MESMO
+ * caminho de producao (`tratarVotoDeEnquete` -> `tratarVotoAvaliacao`).
  *
- * Existe especificamente para validar um ponto que nunca foi testado: se o
- * payload de voto de uma enquete PRIVADA decifra do mesmo jeito que a de
- * grupo (ver comentario em server.ts sobre isso).
+ * Dois usos:
+ *  - validar a decifragem de enquete privada com um numero de teste (foi
+ *    assim que a formula certa de JID/LID foi descoberta, ver server.ts);
+ *  - mandar convite avulso pra alguem que ficou fora do envio automatico de
+ *    `enviarConvitesDeAvaliacao` (ex.: goleiro/convidado, que nao tem
+ *    jogador_id rastreavel na inscricao) quando faz sentido pontualmente -
+ *    sem virar regra permanente de elegibilidade no scheduler.
  *
  * Uso, com a stack no ar:
- *   docker compose exec bot npx tsx src/dev/testar-avaliacao.ts <numero>
+ *   docker compose exec bot npx tsx src/dev/testar-avaliacao.ts <numero> [nome]
  *
  * Exemplo (DDI+DDD+numero, so digitos):
- *   docker compose exec bot npx tsx src/dev/testar-avaliacao.ts 5534991705227
+ *   docker compose exec bot npx tsx src/dev/testar-avaliacao.ts 5534991830259 Guilherme
  *
  * Depois de votar, confira:
  *   select * from avaliacao order by id desc limit 1;
@@ -32,9 +35,10 @@ import { resolver } from '../domain/jogador.js';
 
 const numero = process.argv[2];
 if (!numero || !/^\d+$/.test(numero)) {
-  console.error('uso: npx tsx src/dev/testar-avaliacao.ts <numero, so digitos com DDI>');
+  console.error('uso: npx tsx src/dev/testar-avaliacao.ts <numero, so digitos com DDI> [nome]');
   process.exit(1);
 }
+const nome = process.argv[3] ?? 'Teste avaliacao';
 
 // jogador.telefone e sempre guardado com o sufixo (ver qualquer linha real
 // da tabela) - sem isso o convite fica com um JID que nao bate com o resto.
@@ -44,8 +48,8 @@ async function main(): Promise<void> {
   const partida = await partidaParaLeitura();
   if (!partida) throw new Error('nenhuma partida no banco - crie uma antes de testar');
 
-  const jogador = await resolver({ telefone, nome: 'Teste avaliacao' });
-  console.log('jogador de teste:', { id: jogador.id, telefone });
+  const jogador = await resolver({ telefone, nome });
+  console.log('jogador:', { id: jogador.id, telefone, nome });
   console.log('partida:', { id: partida.id, data_jogo: partida.data_jogo });
 
   const enquete = await sendPoll(telefone, tituloDaEnqueteAvaliacao(), OPCOES_AVALIACAO);

@@ -195,7 +195,8 @@ async function avisarGrupo(ctx: Sessao, texto: string): Promise<void> {
  *
  * Precisa rodar em toda mudanca, publicando ou nao: e o status que faz o bot
  * recusar o 21o. Separado da publicacao porque o grupo so recebe mensagem fora
- * de horario em dois casos - alguem saiu, ou a lista acabou de lotar.
+ * de horario em tres casos - alguem saiu, a lista acabou de lotar, ou um
+ * convidado foi cadastrado (ver `registrarEntradaConvidado`).
  *
  * Devolve `lotouAgora` para quem chama saber se essa e uma das excecoes.
  */
@@ -245,10 +246,13 @@ async function publicarLista(
 }
 
 /**
- * Registra uma ENTRADA (confirmacao, convidado, nome corrigido).
+ * Registra a ENTRADA de um FIXO (confirmacao pela enquete, ou volta de um
+ * convidado orfao cujo anfitriao ja tinha saido).
  *
  * Fica em silencio, exceto quando a lista acabou de lotar - aquela e a hora em
- * que o grupo precisa saber, senao gente continua tentando entrar.
+ * que o grupo precisa saber, senao gente continua tentando entrar. Confirmacao
+ * de fixo nao merece mais que isso: sao dezenas por semana, e quem esta
+ * olhando o grupo ja ve o proprio voto na enquete.
  */
 async function registrarEntrada(
   ctx: Sessao,
@@ -262,6 +266,27 @@ async function registrarEntrada(
   // alerta, e o rodape da lista tambem diz. Antes a mesma frase saia tres
   // vezes na mesma mensagem.
   await publicarLista(ctx, partida, `📣 ${ctx.nomeNaLista} fechou a lista!`);
+}
+
+/**
+ * Registra a ENTRADA de um CONVIDADO (linha ou goleiro) e publica a lista
+ * IMEDIATAMENTE, sem esperar lotar nem o digest das 19:00 (decisao de
+ * 17/08/2026).
+ *
+ * Diferente do fixo: convidado nunca aparece na enquete do grupo, quem
+ * cadastra e sempre o anfitriao no privado. Sem aviso na hora, o resto do
+ * time so saberia do numero novo no digest das 19h ou quando a lista
+ * lotasse - tempo de sobra para organizar time contando com um numero que ja
+ * mudou.
+ */
+async function registrarEntradaConvidado(
+  ctx: Sessao,
+  partida: Partida,
+  cabecalho: string,
+): Promise<void> {
+  const itens = await listar(partida.id);
+  await sincronizarStatus(partida, itens);
+  await publicarLista(ctx, partida, cabecalho);
 }
 
 /**
@@ -328,7 +353,13 @@ async function registrarConvidadosLinha(
   }
   if (!entraram.length) return;
   await noPrivado(ctx, `Anotado: ${entraram.join(', ')}.`, { rodape: true });
-  await registrarEntrada(ctx, partida);
+
+  const rotulo = entraram.length > 1 ? 'convidados' : 'convidado';
+  await registrarEntradaConvidado(
+    ctx,
+    partida,
+    `👥 ${ctx.nomeNaLista} confirmou ${rotulo}: ${entraram.join(', ')}!`,
+  );
 }
 
 /** Pergunta se o proximo goleiro da fila e contratado ou convidado. */
@@ -368,6 +399,16 @@ async function registrarGoleiro(
       : `${nome}: ${r.motivo}`,
     { rodape: true },
   );
+
+  if (r.ok) {
+    await registrarEntradaConvidado(
+      ctx,
+      partida,
+      contratado
+        ? `🧤 Goleiro confirmado: ${nome} (contratado).`
+        : `🧤 ${ctx.nomeNaLista} confirmou o goleiro ${nome}!`,
+    );
+  }
 
   const [proximo, ...resto] = filaRestante;
   if (proximo) {
@@ -549,7 +590,12 @@ async function continuarDialogo(
     await noPrivado(ctx, `Beleza, ${voltaram.join(', ')} continua na lista.`, {
       rodape: true,
     });
-    await registrarEntrada(ctx, partida);
+    const verbo = voltaram.length > 1 ? 'continuam' : 'continua';
+    await registrarEntradaConvidado(
+      ctx,
+      partida,
+      `👥 ${voltaram.join(', ')} ${verbo} na lista, mesmo sem ${ctx.nomeNaLista}!`,
+    );
     return;
   }
 
