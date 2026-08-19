@@ -22,6 +22,8 @@ export interface Partida {
   readonly encerrada_em: Date | null;
   /** Sabado 12:00 - quando a avaliacao pos-jogo dispara. Null em linhas antigas. */
   readonly encerra_em: Date | null;
+  /** Reserva atomica da abertura, ver reservarAbertura em partida.ts. */
+  readonly abrindo_em: Date | null;
 }
 
 /** Uma vaga ocupada, ja com o nome resolvido para exibicao. */

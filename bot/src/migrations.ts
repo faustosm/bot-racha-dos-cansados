@@ -335,4 +335,17 @@ export const migrations: readonly Migration[] = [
       create index if not exists avaliacao_por_enquete on avaliacao (enquete_id);
     `,
   },
+  {
+    // Enquete duplicada em 19/08/2026: o cron de quarta 12:00 e a faxina
+    // horaria de recuperacao dispararam no mesmo minuto, as duas leram
+    // enquete_id nulo (o UPDATE que o grava so acontece segundos depois, apos
+    // o round-trip com a Evolution API) e as duas anunciaram a abertura.
+    //
+    // Esta coluna vira reserva atomica (ver reservarAbertura em partida.ts):
+    // so quem consegue marca-la primeiro segue em frente.
+    name: '014_reserva_abertura',
+    sql: `
+      alter table partida add column abrindo_em timestamptz;
+    `,
+  },
 ];

@@ -11,6 +11,7 @@ import {
   partidaAtual,
   partidaParaLeitura,
   registrarEnquete,
+  reservarAbertura,
 } from './domain/partida.js';
 import { OPCOES, tituloDaEnquete } from './domain/enquete.js';
 import {
@@ -132,6 +133,16 @@ async function abrirParaFixos(log: Log): Promise<void> {
     log.info(
       { partida: partida.data_jogo },
       'abertura ja anunciada para esta partida, nada a fazer',
+    );
+    return;
+  }
+
+  // Reserva atomica: cobre a corrida entre este cron e a faxina horaria de
+  // recuperacao, que pode disparar no mesmo minuto (ver reservarAbertura).
+  if (!(await reservarAbertura(partida.id))) {
+    log.info(
+      { partida: partida.data_jogo },
+      'outra chamada ja esta abrindo esta partida, nao repito',
     );
     return;
   }

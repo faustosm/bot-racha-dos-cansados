@@ -12,7 +12,7 @@ export { isoDate, janelaAvaliacao, janelas, proximoSabado } from './datas.js';
 const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
                  vagas_total, vagas_goleiro, status,
                  enquete_id, enquete_segredo, enquete_criador,
-                 encerrada_em, encerra_em`;
+                 encerrada_em, encerra_em, abrindo_em`;
 
 /**
  * Cria a partida do proximo sabado se ainda nao existir. Idempotente: o
@@ -164,6 +164,34 @@ export async function definirStatus(
   const linhas = await query<{ id: number }>(
     'update partida set status = $2 where id = $1 and status <> $2 returning id',
     [id, status],
+  );
+  return linhas.length > 0;
+}
+
+/**
+ * Reserva atomicamente o direito de anunciar a abertura desta partida.
+ *
+ * `abrirParaFixos` pode disparar duas vezes quase ao mesmo tempo - pelo cron
+ * de quarta 12:00 e pela faxina horaria de recuperacao, que roda no mesmo
+ * minuto. Sem esta reserva as duas leem `enquete_id` nulo (o UPDATE que o
+ * grava so acontece segundos depois, apos o round-trip com a Evolution API) e
+ * as duas anunciam - foi o que gerou a enquete duplicada de 19/08/2026. So
+ * quem ganha este UPDATE segue em frente.
+ *
+ * A reserva expira em 5 minutos: se o processo cair no meio da abertura (ou a
+ * Evolution falhar e `enquete_id` nunca for gravado), a proxima tentativa
+ * horaria nao pode ficar travada esperando uma reserva que ninguem vai
+ * liberar - a recuperacao existe justamente para nao deixar a semana morrer
+ * em silencio.
+ */
+export async function reservarAbertura(id: number): Promise<boolean> {
+  const linhas = await query<{ id: number }>(
+    `update partida set abrindo_em = now()
+      where id = $1
+        and enquete_id is null
+        and (abrindo_em is null or abrindo_em < now() - interval '5 minutes')
+      returning id`,
+    [id],
   );
   return linhas.length > 0;
 }
