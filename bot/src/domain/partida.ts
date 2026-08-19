@@ -12,7 +12,7 @@ export { isoDate, janelaAvaliacao, janelas, proximoSabado } from './datas.js';
 const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
                  vagas_total, vagas_goleiro, status,
                  enquete_id, enquete_segredo, enquete_criador,
-                 encerrada_em, encerra_em, abrindo_em`;
+                 encerrada_em, encerra_em, abrindo_em, encerrando_em`;
 
 /**
  * Cria a partida do proximo sabado se ainda nao existir. Idempotente: o
@@ -190,6 +190,30 @@ export async function reservarAbertura(id: number): Promise<boolean> {
       where id = $1
         and enquete_id is null
         and (abrindo_em is null or abrindo_em < now() - interval '5 minutes')
+      returning id`,
+    [id],
+  );
+  return linhas.length > 0;
+}
+
+/**
+ * Reserva atomicamente o direito de anunciar o encerramento desta partida.
+ *
+ * Mesma corrida de `reservarAbertura`, agora entre o cron de sabado 12:00
+ * (CRON_AVALIACAO) e a faxina horaria/de boot, que pode cair no mesmo minuto:
+ * as duas leriam `encerrada_em` nulo (o UPDATE que o grava so acontece depois
+ * do anuncio no grupo e de mandar um convite de avaliacao por jogador) e as
+ * duas anunciariam - duplicando o convite de cada jogador e deixando a
+ * enquete de nota de um deles orfa (a segunda sobrescreve o enquete_id da
+ * primeira). Mesmo TTL de 5 minutos e mesmo motivo: o processo pode cair no
+ * meio do envio.
+ */
+export async function reservarEncerramento(id: number): Promise<boolean> {
+  const linhas = await query<{ id: number }>(
+    `update partida set encerrando_em = now()
+      where id = $1
+        and encerrada_em is null
+        and (encerrando_em is null or encerrando_em < now() - interval '5 minutes')
       returning id`,
     [id],
   );

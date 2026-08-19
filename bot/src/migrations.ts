@@ -348,4 +348,35 @@ export const migrations: readonly Migration[] = [
       alter table partida add column abrindo_em timestamptz;
     `,
   },
+  {
+    // `encerra_em` (migration 012) nunca recebeu backfill: toda partida criada
+    // antes desta migration fica com a coluna NULL para sempre, e
+    // `partidaAEncerrar` (`where encerra_em <= now()`) nunca a encontra - o
+    // jogo daquela semana nao dispara a avaliacao pos-jogo.
+    //
+    // Deriva de `fecha_em` (sempre preenchida) em vez de `data_jogo`: a
+    // diferenca entre HORA_ENCERRAMENTO (12h) e HORA_FECHA (7h) em
+    // domain/datas.ts e sempre 5h, e somar direto no timestamptz existente
+    // evita depender do fuso da sessao do Postgres para reconstruir o horario
+    // a partir da data.
+    name: '015_backfill_encerra_em',
+    sql: `
+      update partida
+         set encerra_em = fecha_em + interval '5 hours'
+       where encerra_em is null;
+    `,
+  },
+  {
+    // Mesmo problema que `abrindo_em` (migration 014) resolveu para
+    // `abrirParaFixos`, agora em `encerrarPartida`: o cron de sabado 12:00
+    // (CRON_AVALIACAO) e a faxina horaria de recuperacao podem disparar no
+    // mesmo minuto e as duas leriam `encerrada_em` nulo antes de qualquer uma
+    // gravar - reenviando o anuncio de encerramento e os convites de
+    // avaliacao em dobro. Reserva atomica identica, ver `reservarEncerramento`
+    // em partida.ts.
+    name: '016_reserva_encerramento',
+    sql: `
+      alter table partida add column encerrando_em timestamptz;
+    `,
+  },
 ];

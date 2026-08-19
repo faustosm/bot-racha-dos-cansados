@@ -227,8 +227,10 @@ async function publicarLista(
   partida: Partida,
   cabecalho: string,
 ): Promise<void> {
-  const itens = await listar(partida.id);
-  const goleiros = await listarGoleiros(partida.id);
+  const [itens, goleiros] = await Promise.all([
+    listar(partida.id),
+    listarGoleiros(partida.id),
+  ]);
   const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
 
@@ -490,6 +492,27 @@ async function continuarDialogo(
               .map(normalizarNome)
               .includes(normalizarNome(nome)),
           );
+
+    // Dois convidados com o mesmo nome (ex.: anfitriao digitou "João, João")
+    // casam os dois no filtro acima - `.includes` compara por VALOR, nao por
+    // posicao no array. Sem esta checagem os dois entrariam como goleiro (ou
+    // os dois sairiam da linha) sem o anfitriao ter como escolher qual e qual,
+    // igual ao caso que `removerConvidado` ja trata via `{tipo:'ambiguo'}`.
+    const nomeAmbiguo = goleiros.find(
+      (nome) =>
+        pendentes.filter((p) => normalizarNome(p) === normalizarNome(nome))
+          .length > 1,
+    );
+    if (nomeAmbiguo) {
+      await noPrivado(
+        ctx,
+        [
+          `Tem mais de um convidado chamado "${nomeAmbiguo}" - não dá pra saber qual é o goleiro.`,
+          'Cadastre de novo com nomes diferentes (ex: "João 1", "João 2") e me diga quem é o goleiro.',
+        ].join('\n'),
+      );
+      return;
+    }
 
     if (!goleiros.length) {
       await noPrivado(
@@ -828,6 +851,36 @@ export interface VotoRecebido {
 }
 
 /**
+ * Decifra um voto e avisa o log se nao conseguir. Compartilhado entre
+ * `tratarVotoConfirmacao` e `tratarVotoAvaliacao`: os dois decifram do mesmo
+ * jeito, so o segredo muda (da partida ou do convite individual) - extraido
+ * para que uma mudanca no contrato de `decifrarVoto` (ver domain/voto.ts, ja
+ * precisou de ajuste por causa das particularidades de LID/grupo) nao corra o
+ * risco de ser aplicada num handler e esquecida no outro.
+ */
+function decifrarOuAvisar(
+  v: VotoRecebido,
+  segredoBase64: string,
+  mensagemAviso: string,
+): string[] | undefined {
+  if (!v.enqueteId || !v.criadorJid || !v.votanteLid) return undefined;
+
+  const hashes = decifrarVoto(
+    { encPayload: v.encPayload, encIv: v.encIv },
+    {
+      enqueteId: v.enqueteId,
+      criadorJid: v.criadorJid,
+      votanteJid: v.votanteLid,
+      segredo: Uint8Array.from(Buffer.from(segredoBase64, 'base64')),
+    },
+  );
+  if (!hashes) {
+    v.log.warn({ enqueteId: v.enqueteId }, mensagemAviso);
+  }
+  return hashes;
+}
+
+/**
  * Um voto de enquete pode ser da enquete de CONFIRMACAO (grupo, uma por
  * partida) ou de um CONVITE de AVALIACAO (privado, um por jogador - ver
  * domain/avaliacao.ts). Descobre qual e antes de decifrar.
@@ -865,19 +918,12 @@ async function tratarVotoConfirmacao(
     return;
   }
 
-  const hashes = decifrarVoto(
-    { encPayload: v.encPayload, encIv: v.encIv },
-    {
-      enqueteId: v.enqueteId,
-      criadorJid: v.criadorJid,
-      votanteJid: v.votanteLid,
-      segredo: Uint8Array.from(Buffer.from(partida.enquete_segredo, 'base64')),
-    },
+  const hashes = decifrarOuAvisar(
+    v,
+    partida.enquete_segredo,
+    'nao consegui decifrar o voto',
   );
-  if (!hashes) {
-    v.log.warn({ enqueteId: v.enqueteId }, 'nao consegui decifrar o voto');
-    return;
-  }
+  if (!hashes) return;
 
   const escolhidas = opcoesEscolhidas(hashes, OPCOES);
   // Desmarcar tudo nao e o mesmo que dizer "nao vou": e so tirar a resposta.
@@ -1011,19 +1057,12 @@ async function tratarVotoAvaliacao(
 ): Promise<void> {
   if (!v.enqueteId || !v.criadorJid || !v.votanteLid) return;
 
-  const hashes = decifrarVoto(
-    { encPayload: v.encPayload, encIv: v.encIv },
-    {
-      enqueteId: v.enqueteId,
-      criadorJid: v.criadorJid,
-      votanteJid: v.votanteLid,
-      segredo: Uint8Array.from(Buffer.from(convite.enquete_segredo, 'base64')),
-    },
+  const hashes = decifrarOuAvisar(
+    v,
+    convite.enquete_segredo,
+    'nao consegui decifrar a avaliacao',
   );
-  if (!hashes) {
-    v.log.warn({ enqueteId: v.enqueteId }, 'nao consegui decifrar a avaliacao');
-    return;
-  }
+  if (!hashes) return;
 
   const escolhidas = opcoesEscolhidas(hashes, OPCOES_AVALIACAO);
   if (!escolhidas.length) return; // desmarcou tudo
@@ -1097,8 +1136,10 @@ async function tratarNoGrupo(entrada: Contexto): Promise<void> {
   const partida = await partidaParaLeitura();
   if (!partida) return; // Nenhum racha jamais criado: silencio.
 
-  const itens = await listar(partida.id);
-  const goleiros = await listarGoleiros(partida.id);
+  const [itens, goleiros] = await Promise.all([
+    listar(partida.id),
+    listarGoleiros(partida.id),
+  ]);
   await mandar(formatarLista(partida, itens, goleiros, config.RACHA_NOME));
 }
 
@@ -1211,8 +1252,10 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
   }
 
   if (intencao.tipo === 'lista') {
-    const itens = await listar(partida.id);
-    const goleiros = await listarGoleiros(partida.id);
+    const [itens, goleiros] = await Promise.all([
+      listar(partida.id),
+      listarGoleiros(partida.id),
+    ]);
     await noPrivado(ctx, formatarLista(partida, itens, goleiros, config.RACHA_NOME), {
       rodape: true,
     });

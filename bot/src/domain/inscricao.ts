@@ -155,6 +155,24 @@ async function contarComLock(
   };
 }
 
+/**
+ * Mesma checagem de teto (goleiro ou linha, conforme a posicao de destino)
+ * usada em toda entrada nova ou troca de posicao. Extraida porque ja
+ * aconteceu de um site novo esquecer de aplica-la (a troca de posicao em
+ * `confirmarFixo` so ganhou a checagem depois, retroativamente) - com um so
+ * lugar, uma regra nova de elegibilidade nao pode deixar de valer em algum
+ * dos pontos por esquecimento.
+ */
+function motivoDeCapacidade(
+  contagem: { linha: number; gols: number },
+  partida: Partida,
+  posicao: Posicao,
+): string | undefined {
+  return posicao === 'gol'
+    ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
+    : motivoDaRecusa(contagem.linha, partida, 1);
+}
+
 
 export interface Confirmacao {
   readonly posicao: Posicao;
@@ -170,6 +188,17 @@ export async function confirmarFixo(
   posicao: Posicao,
 ): Promise<Resultado<Confirmacao>> {
   return transaction(async (client) => {
+    // Trava a partida ANTES de checar se o jogador ja esta inscrito: sem
+    // isso, duas confirmacoes quase simultaneas do mesmo jogador (duplo
+    // toque na enquete, webhook reentregue com outro id de mensagem) podem
+    // ambas ler "nao existe" e ambas tentar inserir - a segunda bate na
+    // constraint unica (inscricao_fixo_unica) e lanca erro nao tratado em vez
+    // de responder "voce ja estava na lista". `contarComLock` trava a mesma
+    // linha mais adiante; e reentrante dentro da mesma transacao.
+    await client.query('select id from partida where id = $1 for update', [
+      partida.id,
+    ]);
+
     const atual = await client.query<{ id: number; posicao: Posicao }>(
       `select id, posicao from inscricao
         where partida_id = $1 and jogador_id = $2 and removido_em is null`,
@@ -184,10 +213,7 @@ export async function confirmarFixo(
       // Troca de posicao: precisa caber no teto da posicao de DESTINO, seja
       // qual for - mesma checagem que toda entrada nova passa.
       const contagem = await contarComLock(client, partida.id);
-      const motivoTroca =
-        posicao === 'gol'
-          ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
-          : motivoDaRecusa(contagem.linha, partida, 1);
+      const motivoTroca = motivoDeCapacidade(contagem, partida, posicao);
       if (motivoTroca) return erro<Confirmacao>(motivoTroca);
       await client.query('update inscricao set posicao = $2 where id = $1', [
         existente.id,
@@ -199,10 +225,7 @@ export async function confirmarFixo(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo =
-      posicao === 'gol'
-        ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
-        : motivoDaRecusa(contagem.linha, partida, 1);
+    const motivo = motivoDeCapacidade(contagem, partida, posicao);
     if (motivo) return erro<Confirmacao>(motivo);
 
     await client.query(
@@ -296,10 +319,7 @@ export async function adicionarConvidado(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo =
-      posicao === 'gol'
-        ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
-        : motivoDaRecusa(contagem.linha, partida, 1);
+    const motivo = motivoDeCapacidade(contagem, partida, posicao);
     if (motivo) return erro<ItemLista>(motivo);
 
     const { rows } = await client.query<{ id: number }>(
@@ -413,10 +433,7 @@ export async function restaurarInscricao(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo =
-      alvo.posicao === 'gol'
-        ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
-        : motivoDaRecusa(contagem.linha, partida, 1);
+    const motivo = motivoDeCapacidade(contagem, partida, alvo.posicao);
     if (motivo) return erro<{ nome: string; posicao: Posicao }>(motivo);
 
     await client.query(

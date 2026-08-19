@@ -12,6 +12,7 @@ import {
   partidaParaLeitura,
   registrarEnquete,
   reservarAbertura,
+  reservarEncerramento,
 } from './domain/partida.js';
 import { OPCOES, tituloDaEnquete } from './domain/enquete.js';
 import {
@@ -156,8 +157,10 @@ async function abrirParaFixos(log: Log): Promise<void> {
 async function abrirParaConvidados(log: Log): Promise<void> {
   const partida = await partidaAtual();
   if (!partida) return;
-  const itens = await listar(partida.id);
-  const goleiros = await listarGoleiros(partida.id);
+  const [itens, goleiros] = await Promise.all([
+    listar(partida.id),
+    listarGoleiros(partida.id),
+  ]);
   log.info({ partida: partida.data_jogo }, 'convidados liberados');
   await anunciar(
     log,
@@ -182,8 +185,10 @@ async function abrirParaConvidados(log: Log): Promise<void> {
 async function fecharLista(log: Log): Promise<void> {
   const partida = await partidaParaLeitura();
   if (!partida) return;
-  const itens = await listar(partida.id);
-  const goleiros = await listarGoleiros(partida.id);
+  const [itens, goleiros] = await Promise.all([
+    listar(partida.id),
+    listarGoleiros(partida.id),
+  ]);
   await definirStatus(partida.id, 'fechada');
   log.info({ partida: partida.data_jogo }, 'lista fechada');
   await anunciar(
@@ -207,8 +212,10 @@ export async function digestDoDia(log: Log): Promise<void> {
   const partida = await partidaAtual();
   if (!partida) return;
 
-  const itens = await listar(partida.id);
-  const goleiros = await listarGoleiros(partida.id);
+  const [itens, goleiros] = await Promise.all([
+    listar(partida.id),
+    listarGoleiros(partida.id),
+  ]);
   const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
 
@@ -361,14 +368,24 @@ async function enviarConvitesDeAvaliacao(
  * Sabado 12:00 (CRON_AVALIACAO) — o jogo ja acabou: avisa o grupo, manda os
  * convites individuais e marca a partida como encerrada.
  *
- * So tenta UMA vez por partida (`partidaAEncerrar` filtra por
- * `encerrada_em`): diferente de `abrirParaFixos`, aqui nao ha retentativa
- * horaria indefinida se algum envio falhar - evita reenviar convite pra
- * quem ja recebeu so porque outro falhou.
+ * `partidaAEncerrar` filtra por `encerrada_em`, mas so grava esse campo DEPOIS
+ * do anuncio e de mandar um convite por jogador - entao o cron de sabado e a
+ * faxina horaria/de boot podem disparar quase juntos e as duas lerem
+ * `encerrada_em` nulo. `reservarEncerramento` cobre exatamente essa corrida
+ * (mesma ideia de `reservarAbertura` em `abrirParaFixos`): so quem ganha a
+ * reserva segue em frente.
  */
 async function encerrarPartida(log: Log): Promise<void> {
   const partida = await partidaAEncerrar();
   if (!partida) return;
+
+  if (!(await reservarEncerramento(partida.id))) {
+    log.info(
+      { partida: partida.data_jogo },
+      'outra chamada ja esta encerrando esta partida, nao repito',
+    );
+    return;
+  }
 
   log.info({ partida: partida.data_jogo }, 'encerrando racha, avaliacao pos-jogo');
   await anunciar(log, mensagemQualidade());
@@ -390,8 +407,15 @@ async function encerrarPartida(log: Log): Promise<void> {
  */
 async function recuperarAberturaPerdida(log: Log): Promise<void> {
   const dataJogo = proximoSabado(new Date());
-  const { abreFixos } = janelas(dataJogo);
-  if (new Date() < abreFixos) return; // ainda nao era para ter aberto
+  const { abreFixos, fechaEm } = janelas(dataJogo);
+  const agora = new Date();
+  if (agora < abreFixos) return; // ainda nao era para ter aberto
+
+  // Container fora do ar por mais de uma semana, so voltando ja em cima do
+  // proximo sabado: a janela de inscricao deste jogo ja fechou, entao abrir
+  // (e anunciar "Lista aberta!") agora so confundiria o grupo com um jogo que
+  // nao aceita mais confirmacao.
+  if (agora >= fechaEm) return;
 
   const partida = await partidaAtual();
   if (partida?.enquete_id) return; // ja abriu, tudo certo
@@ -441,9 +465,6 @@ export function iniciarAgendador(log: Log): void {
     recuperarAberturaPerdida(log).catch((err) =>
       log.warn({ err }, 'falha ao recuperar abertura perdida'),
     );
-    // `encerrarPartida` ja e idempotente por si so (`partidaAEncerrar` filtra
-    // por `encerra_em`/`encerrada_em`) - nao precisa do guard extra que
-    // `recuperarAberturaPerdida` tem para `abrirParaFixos`.
     encerrarPartida(log).catch((err) =>
       log.warn({ err }, 'falha ao encerrar partida/publicar avaliacao'),
     );

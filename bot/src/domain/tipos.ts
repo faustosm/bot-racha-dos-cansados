@@ -24,6 +24,8 @@ export interface Partida {
   readonly encerra_em: Date | null;
   /** Reserva atomica da abertura, ver reservarAbertura em partida.ts. */
   readonly abrindo_em: Date | null;
+  /** Reserva atomica do encerramento, ver reservarEncerramento em partida.ts. */
+  readonly encerrando_em: Date | null;
 }
 
 /** Uma vaga ocupada, ja com o nome resolvido para exibicao. */

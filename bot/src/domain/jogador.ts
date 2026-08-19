@@ -43,6 +43,9 @@ interface LinhaJogador {
   lid: string | null;
   telefone: string | null;
   nome: string;
+  /** A coluna bruta (pushName), sem o coalesce com nome_escolhido - so para
+   * comparar com o pushName recebido e saber se o UPDATE e mesmo necessario. */
+  nome_bruto: string;
   nome_confirmado: boolean;
   falou_no_privado: boolean;
   nao_perturbe: boolean;
@@ -51,6 +54,7 @@ interface LinhaJogador {
 const SELECT_JOGADOR = `
   id, lid, telefone,
   coalesce(nome_escolhido, nome) as nome,
+  nome as nome_bruto,
   nome_confirmado,
   falou_no_privado,
   nao_perturbe
@@ -117,6 +121,16 @@ export async function resolver(id: Identidade): Promise<Jogador> {
   }
 
   return transaction(async (client) => {
+    // Trava por identidade ANTES de checar se o jogador ja existe: sem isso,
+    // duas chamadas quase simultaneas para uma pessoa nova (ex.: um webhook
+    // reentregue com outro id de mensagem) podem ambas ver 0 linhas e ambas
+    // tentar o INSERT - a segunda bate em jogador.lid/telefone (unique) e
+    // lanca erro nao tratado, e o evento e descartado em silencio. A trava e
+    // liberada sozinha no commit/rollback da transacao (xact).
+    await client.query('select pg_advisory_xact_lock(hashtext($1))', [
+      `${lid ?? ''}|${telefone ?? ''}`,
+    ]);
+
     const { rows } = await client.query<LinhaJogador>(
       `select ${SELECT_JOGADOR} from jogador
         where ($1::text is not null and lid = $1)
@@ -143,6 +157,17 @@ export async function resolver(id: Identidade): Promise<Jogador> {
     for (const perdedor of rows.slice(1)) {
       await fundir(client, vencedor, perdedor);
     }
+
+    // Nada mudaria: pula a escrita. `resolver` roda em toda mensagem e todo
+    // voto (inclusive leituras puras, como "lista") - sem este atalho, cada
+    // uma dessas chamadas abre uma transacao de escrita a toa contra
+    // `jogador`.
+    const semMudanca =
+      (lid === null || vencedor.lid === lid) &&
+      (telefone === null || vencedor.telefone === telefone) &&
+      vencedor.nome_bruto === nome &&
+      (vencedor.falou_no_privado || id.noPrivado !== true);
+    if (semMudanca) return paraJogador(vencedor);
 
     // Completa o identificador que faltava e atualiza o pushName. O
     // nome_escolhido nao e tocado: ele vence o pushName para sempre.
