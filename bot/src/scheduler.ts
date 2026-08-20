@@ -161,6 +161,19 @@ async function abrirParaConvidados(log: Log): Promise<void> {
     listar(partida.id),
     listarGoleiros(partida.id),
   ]);
+
+  // A lista de linha ja pode ter lotado antes de quinta (ex.: os 18 fixos
+  // confirmaram cedo). Anunciar "pode trazer convidado" nesse caso e enganoso -
+  // quem tentar sera recusado na hora, depois de ja ter sido convidado a trazer
+  // alguem. Sem vaga de linha, nao ha o que liberar.
+  if (contarVagas(itens, partida.vagas_total).livres === 0) {
+    log.info(
+      { partida: partida.data_jogo },
+      'lista de linha ja cheia na quinta, pulando anuncio de convidados',
+    );
+    return;
+  }
+
   log.info({ partida: partida.data_jogo }, 'convidados liberados');
   await anunciar(
     log,
