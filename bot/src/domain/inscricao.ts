@@ -180,6 +180,20 @@ export interface Confirmacao {
   readonly jaEstava: boolean;
   /** Entrou agora. Falso quando apenas trocou de linha para gol ou vice-versa. */
   readonly novo: boolean;
+  /**
+   * Esta entrada foi a que fechou a lista de linha (contagem foi de
+   * `vagas_total - 1` para `vagas_total`).
+   *
+   * Calculado aqui, na mesma contagem travada (`contarComLock`) que decide se
+   * cabe - nunca a partir da coluna `status` da partida. `status` e so
+   * bookkeeping (`sincronizarStatus` em handlers.ts) e pode ficar desalinhado
+   * da ocupacao real quando uma inscricao e corrigida direto no banco (ja
+   * aconteceu - ver nota em `iniciarConvidados`). Se o "lotou" confiasse em
+   * `status <> 'cheia'` para decidir quem avisa, uma correcao manual que deixa
+   * `status = 'cheia'` preso engole o aviso do proximo fechamento de verdade
+   * em silencio.
+   */
+  readonly lotouAgora: boolean;
 }
 
 export async function confirmarFixo(
@@ -208,7 +222,7 @@ export async function confirmarFixo(
     const existente = atual.rows[0];
     if (existente) {
       if (existente.posicao === posicao) {
-        return ok({ posicao, jaEstava: true, novo: false });
+        return ok({ posicao, jaEstava: true, novo: false, lotouAgora: false });
       }
       // Troca de posicao: precisa caber no teto da posicao de DESTINO, seja
       // qual for - mesma checagem que toda entrada nova passa.
@@ -221,7 +235,12 @@ export async function confirmarFixo(
       ]);
       // Trocou de posicao, mas ja estava na lista: quem chama nao deve
       // reperguntar sobre convidados nem repetir a conversa de boas-vindas.
-      return ok({ posicao, jaEstava: false, novo: false });
+      return ok({
+        posicao,
+        jaEstava: false,
+        novo: false,
+        lotouAgora: posicao === 'linha' && contagem.linha + 1 === partida.vagas_total,
+      });
     }
 
     const contagem = await contarComLock(client, partida.id);
@@ -233,7 +252,12 @@ export async function confirmarFixo(
        values ($1, 'fixo', $2, $3)`,
       [partida.id, posicao, jogadorId],
     );
-    return ok({ posicao, jaEstava: false, novo: true });
+    return ok({
+      posicao,
+      jaEstava: false,
+      novo: true,
+      lotouAgora: posicao === 'linha' && contagem.linha + 1 === partida.vagas_total,
+    });
   });
 }
 

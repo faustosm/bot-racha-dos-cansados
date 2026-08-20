@@ -39,7 +39,6 @@ import {
 } from './domain/avaliacao.js';
 import type { ConviteAvaliacao } from './domain/avaliacao.js';
 import { decifrarVoto, opcoesEscolhidas } from './domain/voto.js';
-import type { Vagas } from './domain/lista.js';
 import { alertasDeVagas, contarVagas, formatarLista } from './domain/lista.js';
 import type { ItemLista, Partida } from './domain/tipos.js';
 import { comoFalarComOBot } from './link.js';
@@ -193,27 +192,21 @@ async function avisarGrupo(ctx: Sessao, texto: string): Promise<void> {
 /**
  * Mantem o status da partida coerente com a ocupacao real, SEM mandar mensagem.
  *
- * Precisa rodar em toda mudanca, publicando ou nao: e o status que faz o bot
- * recusar o 21o. Separado da publicacao porque o grupo so recebe mensagem fora
- * de horario em tres casos - alguem saiu, a lista acabou de lotar, ou um
- * convidado foi cadastrado (ver `registrarEntradaConvidado`).
- *
- * Devolve `lotouAgora` para quem chama saber se essa e uma das excecoes.
+ * So bookkeeping (exibicao/futuras consultas) - a recusa do 21o usa a
+ * contagem travada em `contarComLock` (inscricao.ts), nao esta coluna. Por
+ * isso NAO e daqui que sai o "lotou agora": se uma inscricao for corrigida
+ * direto no banco (ja aconteceu), o status pode ficar preso em 'cheia' sem a
+ * lista estar cheia de verdade, e usar essa coluna como gatilho do aviso
+ * engoliria em silencio o proximo fechamento real. Quem confirma
+ * (`confirmarFixo`) devolve `lotouAgora` calculado na mesma contagem travada
+ * que decide se cabe - e por isso imune a esse desalinhamento.
  */
 async function sincronizarStatus(
   partida: Partida,
   itens: readonly ItemLista[],
-): Promise<{ lotouAgora: boolean; vagas: Vagas }> {
+): Promise<void> {
   const vagas = contarVagas(itens, partida.vagas_total);
-
-  // `definirStatus` so devolve true para quem REALMENTE mudou o status. Numa
-  // corrida entre duas confirmacoes, uma so ganha - e so ela anuncia.
-  const lotouAgora =
-    vagas.livres === 0 ? await definirStatus(partida.id, 'cheia') : false;
-
-  if (vagas.livres > 0) await definirStatus(partida.id, 'aberta');
-
-  return { lotouAgora, vagas };
+  await definirStatus(partida.id, vagas.livres === 0 ? 'cheia' : 'aberta');
 }
 
 /**
@@ -259,9 +252,10 @@ async function publicarLista(
 async function registrarEntrada(
   ctx: Sessao,
   partida: Partida,
+  lotouAgora: boolean,
 ): Promise<void> {
   const itens = await listar(partida.id);
-  const { lotouAgora } = await sincronizarStatus(partida, itens);
+  await sincronizarStatus(partida, itens);
   if (!lotouAgora) return;
 
   // O cabecalho NAO repete "lista completa": `publicarLista` ja acrescenta o
@@ -648,7 +642,7 @@ async function tratarConfirmar(ctx: Sessao, partida: Partida): Promise<void> {
   // Ja estava na lista e nada mudou: republicar seria so ruido.
   if (r.valor.jaEstava) return;
 
-  await registrarEntrada(ctx, partida);
+  await registrarEntrada(ctx, partida, r.valor.lotouAgora);
 
   if (!r.valor.novo) return;
 
@@ -900,7 +894,13 @@ export async function tratarVotoDeEnquete(v: VotoRecebido): Promise<void> {
     return;
   }
 
-  v.log.info({ enqueteId: v.enqueteId }, 'voto de enquete desconhecida');
+  // warn, nao info: um voto pra um enqueteId que nao bate com nada e SEMPRE
+  // um voto perdido de verdade - nao tem retry nem forma de recuperar o
+  // conteudo depois (a enquete do WhatsApp e cifrada por enqueteId, sem casar
+  // o id nao ha segredo pra decifrar). A causa mais provavel e enquete
+  // duplicada na abertura (corrigido em 761821c) - mas so o log em warn evita
+  // que o proximo caso passe batido de novo em silencio.
+  v.log.warn({ enqueteId: v.enqueteId }, 'voto de enquete desconhecida - voto perdido, sem forma de recuperar');
 }
 
 /**
@@ -1008,7 +1008,7 @@ async function tratarVotoConfirmacao(
   // bot precisar insistir no privado.
   // Confirmacao NAO interrompe o grupo: sao dezenas por semana e a lista sai
   // no digest das 19:00. So o "lotou agora" escapa daqui.
-  await registrarEntrada(ctx, partida);
+  await registrarEntrada(ctx, partida, r.valor.lotouAgora);
 
   if (!comConvidado) return;
 
