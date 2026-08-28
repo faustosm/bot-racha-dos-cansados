@@ -28,6 +28,8 @@ import {
   partidaPorId,
 } from './domain/partida.js';
 import {
+  OPCAO_NAO_VOU,
+  OPCAO_VOU_COM_CONVIDADO,
   OPCOES,
   interpretar,
   registrarVoto,
@@ -764,16 +766,30 @@ async function tratarConfirmar(ctx: Sessao, partida: Partida): Promise<void> {
     return;
   }
 
-  await noPrivado(
-    ctx,
-    r.valor.jaEstava
-      ? 'Você já estava na lista.'
-      : `Confirmado como ${r.valor.posicao}. ✅`,
-    { rodape: true },
-  );
+  if (r.valor.jaEstava) {
+    // "Ja estava" sozinho deixava a pessoa sem saber o proximo passo (saiu?
+    // quer convidar?). So oferece "levar convidado" se ainda cabe: sugerir
+    // isso com a lista cheia so pra `adicionarConvidado` recusar depois e a
+    // mesma confusao do caso Thiago Juliano/Gustavo.
+    const itens = await listar(partida.id);
+    const linhas = [
+      'Você já está confirmado na lista ✅.',
+      `Pra sair, muda seu voto pra "${OPCAO_NAO_VOU}" na enquete (ou responde "não vou mais" aqui).`,
+    ];
+    if (cabeMais(contarVagas(itens, partida.vagas_total))) {
+      linhas.push(
+        `Pra levar um convidado, muda pra "${OPCAO_VOU_COM_CONVIDADO}" (ou manda "quero levar convidado" aqui).`,
+      );
+    }
+    linhas.push('Outras opções: "ajuda".');
+    await noPrivado(ctx, linhas.join('\n'), { rodape: true });
+    // Nada mudou na lista: republicar seria so ruido.
+    return;
+  }
 
-  // Ja estava na lista e nada mudou: republicar seria so ruido.
-  if (r.valor.jaEstava) return;
+  await noPrivado(ctx, `Confirmado como ${r.valor.posicao}. ✅`, {
+    rodape: true,
+  });
 
   await registrarEntrada(ctx, partida, r.valor.lotouAgora);
 
