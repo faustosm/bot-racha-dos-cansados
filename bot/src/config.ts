@@ -22,6 +22,13 @@ const schema = z.object({
   // O bot loga o JID de qualquer grupo que receber mensagem para voce copiar.
   GROUP_JID: z.string().default(''),
 
+  // Telefone (formato @s.whatsapp.net) de quem administra o racha. Vazio
+  // desliga o alerta. Usado so para avisar no privado quando um voto de
+  // enquete se perde (enquete duplicada/desconhecida ou falha ao decifrar) -
+  // sem isso o unico sinal e uma linha de log warn que ninguem le (foi o que
+  // aconteceu em 20-21/08/2026, ver commit da reserva atomica de abertura).
+  ADMIN_TELEFONE: z.string().default(''),
+
   // --- Identidade do racha (aparece na enquete e nos anuncios) --------------
   RACHA_NOME: z.string().default('Racha'),
   RACHA_LOCAL: z.string().default(''),
@@ -53,7 +60,13 @@ const schema = z.object({
 
   // Quanto tempo uma pergunta do bot fica valida no privado. Sem isso, um "3"
   // respondido tres dias depois viraria convidado fantasma.
-  CONVERSA_TTL_MIN: z.coerce.number().int().positive().default(15),
+  //
+  // 15min era curto demais pro ritmo real de resposta no WhatsApp - o Junior
+  // respondeu "Vinicius" 22min depois da pergunta e caiu fora da janela, o
+  // bot nao reconheceu o dialogo e ele achou que tinha sido ignorado (bug do
+  // Vinicius, 27/08/2026). 60min cobre esse atraso sem reabrir o risco do "3"
+  // de dias depois.
+  CONVERSA_TTL_MIN: z.coerce.number().int().positive().default(60),
 
   // Numero do bot, so digitos com DDI (ex: 553497062526). Usado para montar o
   // link wa.me dos anuncios, que abre o privado com a mensagem preenchida -

@@ -196,6 +196,18 @@ export interface Confirmacao {
   readonly lotouAgora: boolean;
 }
 
+/** A inscricao ativa da pessoa nesta partida, se houver. So leitura. */
+export async function minhaInscricao(
+  partidaId: number,
+  jogadorId: number,
+): Promise<{ posicao: Posicao } | undefined> {
+  return queryOne<{ posicao: Posicao }>(
+    `select posicao from inscricao
+      where partida_id = $1 and jogador_id = $2 and removido_em is null`,
+    [partidaId, jogadorId],
+  );
+}
+
 export async function confirmarFixo(
   partida: Partida,
   jogadorId: number,

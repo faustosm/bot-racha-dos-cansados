@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { query, transaction } from '../db.js';
+import { query, queryOne, transaction } from '../db.js';
 
 // A mesma pessoa aparece com identificadores diferentes conforme o canal:
 //
@@ -186,6 +186,19 @@ export async function resolver(id: Identidade): Promise<Jogador> {
     const j = atualizado.rows[0];
     return j ? paraJogador(j) : paraJogador(vencedor);
   });
+}
+
+/**
+ * Busca um jogador pelo id - usado pelo cron de aviso de expiracao
+ * (scheduler.ts), que so tem o `jogador_id` guardado na conversa e precisa do
+ * telefone e de `naoPerturbe` pra decidir se manda o aviso.
+ */
+export async function buscarPorId(jogadorId: number): Promise<Jogador | undefined> {
+  const r = await queryOne<LinhaJogador>(
+    `select ${SELECT_JOGADOR} from jogador where id = $1`,
+    [jogadorId],
+  );
+  return r ? paraJogador(r) : undefined;
 }
 
 /** Liga/desliga a valvula de escape das mensagens que o bot inicia. */

@@ -27,7 +27,8 @@ import {
   formatarLista,
   rotuloData,
 } from './domain/lista.js';
-import { limparExpiradas } from './conversa.js';
+import { limparExpiradas, marcarAvisoExpiracao, proximasAExpirar } from './conversa.js';
+import { buscarPorId } from './domain/jogador.js';
 import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
 
@@ -440,6 +441,40 @@ async function recuperarAberturaPerdida(log: Log): Promise<void> {
   await abrirParaFixos(log);
 }
 
+/**
+ * Roda a cada minuto: avisa quem tem uma pergunta do bot prestes a expirar
+ * ("ainda ta ai?"), em vez de deixar o prazo estourar em silencio.
+ *
+ * So avisa quem tem `pergunta` guardada (conversas de antes desta
+ * funcionalidade nao tem o texto pra reprisar), respeita `naoPerturbe` e
+ * exige telefone cadastrado - mesmas regras de qualquer mensagem que o bot
+ * inicia (ver `enviarConvitesDeAvaliacao`).
+ */
+async function avisarConversasQuaseExpirando(log: Log): Promise<void> {
+  const pendentes = await proximasAExpirar();
+
+  for (const c of pendentes) {
+    const pergunta = c.dados.pergunta;
+    if (!pergunta) continue;
+
+    const jogador = await buscarPorId(c.jogadorId);
+    if (!jogador || jogador.naoPerturbe || !jogador.telefone) continue;
+
+    await marcarAvisoExpiracao(c.jogadorId, c.partidaId, c.estado, c.dados);
+    enfileirar(log, {
+      tipo: 'texto',
+      para: jogador.telefone,
+      texto: [
+        '⏰ Você tinha uma pergunta minha em aberto e o tempo tá acabando:',
+        '',
+        `"${pergunta}"`,
+        '',
+        'Ainda quer continuar? Responda "sim" ou "não".',
+      ].join('\n'),
+    });
+  }
+}
+
 export function iniciarAgendador(log: Log): void {
   const tarefas: [string, string, () => Promise<void>][] = [
     ['abre_fixos', config.CRON_ABRE_FIXOS, () => abrirParaFixos(log)],
@@ -464,6 +499,15 @@ export function iniciarAgendador(log: Log): void {
     });
     log.info({ nome, expressao }, 'tarefa agendada');
   }
+
+  // A cada minuto: avisa quem tem pergunta pendente prestes a expirar. Precisa
+  // ser fino (nao horario) porque o aviso tem que chegar POUCO antes do
+  // prazo - CONVERSA_TTL_MIN e tipicamente dezenas de minutos.
+  cron.schedule('* * * * *', () => {
+    avisarConversasQuaseExpirando(log).catch((err) =>
+      log.warn({ err }, 'falha ao avisar conversas quase expirando'),
+    );
+  });
 
   // Faxina de hora em hora: conversas vencidas e, principalmente, partidas que
   // passaram da hora sem o cron de sabado ter rodado (container parado naquele

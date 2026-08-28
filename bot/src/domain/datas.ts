@@ -31,6 +31,11 @@ export const HORA_FECHA = 7;
 /** Hora do encerramento (avaliacao pos-jogo), depois do jogo acabar. */
 export const HORA_ENCERRAMENTO = 12;
 
+/** Hora em que a lista abre pros fixos (quarta, 3 dias antes do jogo). */
+export const HORA_ABRE_FIXOS = 12;
+
+const QUARTA = 3;
+
 /**
  * As quatro janelas de uma partida, derivadas da data do jogo:
  * quarta 12:00 (fixos), quinta 12:00 (convidados), sabado 07:00 (fecha,
@@ -46,7 +51,7 @@ export function janelas(dataJogo: string): {
   encerraEm: Date;
 } {
   return {
-    abreFixos: emDia(dataJogo, -3, 12),
+    abreFixos: emDia(dataJogo, -3, HORA_ABRE_FIXOS),
     abreConvidados: emDia(dataJogo, -2, 12),
     fechaEm: emDia(dataJogo, 0, HORA_FECHA),
     encerraEm: emDia(dataJogo, 0, HORA_ENCERRAMENTO),
@@ -61,4 +66,31 @@ export function janelas(dataJogo: string): {
  */
 export function janelaAvaliacao(dataJogo: string): Date {
   return emDia(dataJogo, 4, HORA_ENCERRAMENTO);
+}
+
+export type StatusAbertura =
+  | { readonly tipo: 'abre_em'; readonly data: Date }
+  | { readonly tipo: 'a_qualquer_momento' };
+
+/**
+ * Quando abre a proxima janela pros fixos, a partir de `agora` - usada so
+ * quando NAO ha partida "atual" no banco (fora da janela do racha corrente).
+ *
+ * Calcula a proxima quarta DIRETO do dia da semana de `agora`, sem passar por
+ * `proximoSabado`: aquela funcao devolve HOJE quando hoje ja e sabado, e
+ * compor `janelas(proximoSabado(agora)).abreFixos` em cima disso erraria bem
+ * no caso mais comum (sabado depois das 7h, sem partida "atual" -> cairia
+ * numa quarta que ja passou).
+ */
+export function proximaAberturaFixos(agora: Date): StatusAbertura {
+  const d = new Date(agora);
+  const diasAteQuarta = (QUARTA - d.getDay() + 7) % 7;
+  if (diasAteQuarta === 0 && d.getHours() >= HORA_ABRE_FIXOS) {
+    // Ja e quarta e ja passou do meio-dia: a criacao da partida
+    // (garantirPartida, via CRON_ABRE_FIXOS) deve estar rolando agora.
+    return { tipo: 'a_qualquer_momento' };
+  }
+  d.setDate(d.getDate() + diasAteQuarta);
+  d.setHours(HORA_ABRE_FIXOS, 0, 0, 0);
+  return { tipo: 'abre_em', data: d };
 }

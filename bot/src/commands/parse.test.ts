@@ -161,6 +161,56 @@ describe('parse - convite em linguagem natural', () => {
   });
 });
 
+describe('parse - goleiro em linguagem natural', () => {
+  // Verbo ja diz o tipo: contratado. Nao deve perguntar de novo depois.
+  for (const t of [
+    'Contratei um goleiro',
+    'contratei goleiro',
+    'quero contratar um goleiro',
+    'vou contratar um goleiro',
+  ]) {
+    it(`"${t}" pede o nome e ja marca contratado`, () => {
+      assert.deepEqual(parse(t), {
+        tipo: 'quero_goleiro',
+        contratadoImplicito: true,
+      });
+    });
+  }
+
+  // Verbo ambiguo: pode ser contratado ou convidado de um fixo - o bot
+  // pergunta depois de saber o nome.
+  for (const t of [
+    'Chamei um goleiro',
+    'add goleiro',
+    'Quero adicionar um goleiro',
+    'adicionar um goleiro',
+    'preciso arranjar um goleiro',
+    'arranjei um goleiro',
+  ]) {
+    it(`"${t}" pede o nome sem assumir o tipo`, () => {
+      assert.deepEqual(parse(t), {
+        tipo: 'quero_goleiro',
+        contratadoImplicito: false,
+      });
+    });
+  }
+
+  it('nao vira convidado de linha chamado "goleiro"', () => {
+    const r = parse('adicionar um goleiro');
+    assert.notEqual(r?.tipo, 'convidados');
+  });
+
+  it('nao rouba o convite normal de linha', () => {
+    assert.deepEqual(parse('vou levar um convidado'), {
+      tipo: 'quero_convidar',
+    });
+    assert.deepEqual(parse('quero adicionar o Pedro'), {
+      tipo: 'convidados',
+      nomes: ['Pedro'],
+    });
+  });
+});
+
 describe('parse - escolha numa lista', () => {
   it('aceita um numero, varios, e "todos"', () => {
     assert.deepEqual(parse('1'), { tipo: 'numeros', numeros: [1] });

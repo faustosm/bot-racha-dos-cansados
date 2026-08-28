@@ -12,6 +12,13 @@ export type Intencao =
   | { tipo: 'convidados'; nomes: string[] }
   /** Quer levar alguem mas nao disse quem: o bot pergunta os nomes. */
   | { tipo: 'quero_convidar' }
+  /**
+   * Quer adicionar um goleiro (contratado ou convidado) mas ainda nao disse o
+   * nome: o bot pergunta. `contratadoImplicito` vem true quando o verbo ja
+   * entrega o tipo ("contratei um goleiro") - nesse caso o bot nao pergunta
+   * de novo "contratado ou convidado?".
+   */
+  | { tipo: 'quero_goleiro'; contratadoImplicito: boolean }
   /** Tirar um convidado especifico, pelo nome. */
   | { tipo: 'tirar_convidado'; nome: string }
   | { tipo: 'numeros'; numeros: number[] }
@@ -192,6 +199,13 @@ const RE_CONVIDAR =
 
 const RE_CONVIDADO_PREFIXO = /^convidad[oa]s?\s*(.*)$/i;
 
+// Pedido de goleiro em linguagem natural, ANTES do convite generico: sem isso
+// "adicionar um goleiro" caia em RE_CONVIDAR e virava um convidado de LINHA
+// chamado literalmente "goleiro". Cobre presente, passado e infinitivo porque
+// "contratei"/"chamei" (ja fiz) sao tao comuns quanto "quero contratar".
+const RE_GOLEIRO =
+  /^(?:eu\s+)?(?:(?:vou|quero|posso|preciso|consegui|arranjei|arrumei|achei|tenho)\s+)?(?:add|adicionar|adiciono|contratar|contratei|contrato|chamar|chamei|chamo|arranjar|arranjei|arrumar|arrumei|trazer|trago|levar|levo)\s+(?:um|uma|mais\s+um|outro|dois|duas)?\s*goleiros?\b/i;
+
 // Tirar convidado pelo nome, numa mensagem so. Duas formas de dizer:
 //   "tirar o Joao" / "remover Joao"   -> verbo na frente
 //   "o Joao nao vai mais"             -> nome na frente
@@ -226,6 +240,13 @@ export function parse(textoOriginal: string): Intencao | undefined {
   if (AFIRMATIVAS.has(t)) return { tipo: 'afirmativa' };
 
   if (CONFIRMAR.has(t)) return { tipo: 'confirmar' };
+
+  // Goleiro ANTES do convite generico (ver comentario em RE_GOLEIRO) e antes
+  // de confirmar presenca pelo mesmo motivo do convite: "vou contratar um
+  // goleiro" comeca com "vou".
+  if (RE_GOLEIRO.test(original)) {
+    return { tipo: 'quero_goleiro', contratadoImplicito: t.includes('contrat') };
+  }
 
   // Convite ANTES de confirmar presenca: "vou levar o Pedro" comeca com "vou",
   // e a regra de confirmacao casa por prefixo. Sem esta ordem, quem quer trazer
