@@ -72,6 +72,22 @@ const schema = z.object({
   // link wa.me dos anuncios, que abre o privado com a mensagem preenchida -
   // e como as pessoas comecam a falar com o bot sem salvar contato.
   BOT_NUMERO: z.string().regex(/^\d*$/, 'BOT_NUMERO: so digitos').default(''),
+
+  // --- Publicacao de estatisticas no site -----------------------------------
+  // O site (rachadoscansados.com.br) e 100% estatico, sem backend nem acesso
+  // ao Postgres. Este token (fine-grained, escopo Contents:read/write SO no
+  // repo do site) e o que permite ao bot commitar o JSON de estatisticas
+  // direto no repo - o site so precisa dar fetch num arquivo estatico.
+  // Vazio desliga a publicacao (default seguro pra dev/self-host).
+  GITHUB_TOKEN: z.string().default(''),
+  GITHUB_REPO: z.string().default('faustosm/rachadoscansados'),
+  GITHUB_ESTATISTICAS_PATH: z.string().default('public/estatisticas.json'),
+  // Diario as 03:00 (fora de pico): a nota de avaliacao continua chegando por
+  // dias depois do jogo (convite individual no privado, cada um responde no
+  // seu tempo) - um unico gatilho pos-encerramento de sabado deixaria a
+  // media "congelada" cedo demais. `publicarArquivo` so commita se o
+  // conteudo mudou, entao rodar todo dia nao gera build a toa no Cloudflare.
+  CRON_ESTATISTICAS: z.string().default('0 3 * * *'),
 });
 
 const parsed = schema.safeParse(process.env);

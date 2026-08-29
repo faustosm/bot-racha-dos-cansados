@@ -31,6 +31,7 @@ import { limparExpiradas, marcarAvisoExpiracao, proximasAExpirar } from './conve
 import { buscarPorId } from './domain/jogador.js';
 import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
+import { publicarEstatisticas } from './estatisticas.js';
 
 export interface Log {
   info: (obj: unknown, msg: string) => void;
@@ -487,6 +488,7 @@ export function iniciarAgendador(log: Log): void {
     ['digest', config.CRON_DIGEST, () => digestDoDia(log)],
     ['chamada', config.CRON_CHAMADA, () => chamadaDeSexta(log)],
     ['avaliacao', config.CRON_AVALIACAO, () => encerrarPartida(log)],
+    ['estatisticas', config.CRON_ESTATISTICAS, () => publicarEstatisticas(log)],
   ];
 
   for (const [nome, expressao, fn] of tarefas) {

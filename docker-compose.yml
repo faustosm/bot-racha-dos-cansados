@@ -157,6 +157,12 @@ services:
       RACHA_LOCAL: ${RACHA_LOCAL:-}
       RACHA_ENDERECO: ${RACHA_ENDERECO:-}
       RACHA_HORARIO: ${RACHA_HORARIO:-09:00 às 11:00}
+
+      # Publicacao de estatisticas no site (rachadoscansados.com.br/estatistica).
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_REPO: ${GITHUB_REPO:-faustosm/rachadoscansados}
+      GITHUB_ESTATISTICAS_PATH: ${GITHUB_ESTATISTICAS_PATH:-public/estatisticas.json}
+      CRON_ESTATISTICAS: ${CRON_ESTATISTICAS:-0 3 * * *}
     healthcheck:
       test:
         - CMD
