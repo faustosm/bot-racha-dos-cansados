@@ -25,6 +25,11 @@ const dadosBase: DadosBrutos = {
     { nota: 4, quantidade: '9' },
     { nota: 5, quantidade: '21' },
   ],
+  aparicoesConvidados: [
+    { convidado_nome: 'Carlos', data_jogo: '2026-08-15' },
+    { convidado_nome: 'carlos', data_jogo: '2026-08-22' },
+    { convidado_nome: 'Diego', data_jogo: '2026-08-15' },
+  ],
   jogadoresCadastrados: 10,
 };
 
@@ -66,11 +71,34 @@ describe('montarEstatisticas', () => {
       presenca: [],
       padrinhos: [],
       distribuicaoNotas: [],
+      aparicoesConvidados: [],
       jogadoresCadastrados: 5,
     };
     const r = montarEstatisticas(vazio, new Date());
     assert.equal(r.resumo.taxaLotacaoLinha, null);
     assert.equal(r.resumo.notaMediaGeral, null);
     assert.equal(r.resumo.rachasRealizados, 0);
+  });
+
+  it('agrupa volume de convidados por nome normalizado (sem acento/caixa) e conta quanto falta pra virar fixo', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    assert.deepEqual(
+      r.volumeConvidados.map((v) => [v.nome, v.vezes, v.faltamParaFixo]),
+      [['Carlos', 2, 1], ['Diego', 1, 2]],
+    );
+  });
+
+  it('quando ja bateu as 3 presencas, faltamParaFixo fica em zero (nao negativo)', () => {
+    const dados: DadosBrutos = {
+      ...dadosBase,
+      aparicoesConvidados: [
+        { convidado_nome: 'Elias', data_jogo: '2026-08-01' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-08' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-15' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-22' },
+      ],
+    };
+    const r = montarEstatisticas(dados, new Date());
+    assert.deepEqual(r.volumeConvidados[0], { nome: 'Elias', vezes: 4, faltamParaFixo: 0 });
   });
 });

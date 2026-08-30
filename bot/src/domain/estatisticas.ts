@@ -1,4 +1,8 @@
 import { query } from '../db.js';
+import { normalizarNome } from './inscricao.js';
+
+/** Regra do grupo: quem vem 3x como convidado vira fixo. */
+export const PRESENCAS_PARA_VIRAR_FIXO = 3;
 
 // O boletim publico do site (rachadoscansados.com.br/estatistica) precisa de
 // numeros ja calculados, nunca do banco cru: o site e 100% estatico e nao
@@ -38,6 +42,12 @@ export interface DistribuicaoNota {
   quantidade: number;
 }
 
+export interface VolumeConvidado {
+  nome: string;
+  vezes: number;
+  faltamParaFixo: number;
+}
+
 export interface Estatisticas {
   geradoEm: string;
   totalRachas: number;
@@ -53,6 +63,7 @@ export interface Estatisticas {
   presenca: PresencaJogador[];
   padrinhos: Padrinho[];
   distribuicaoNotas: DistribuicaoNota[];
+  volumeConvidados: VolumeConvidado[];
 }
 
 // ── Busca (IO) ───────────────────────────────────────────────────────────
@@ -149,6 +160,26 @@ const SQL_DISTRIBUICAO_NOTAS = `
    order by a.nota
 `;
 
+interface LinhaAparicaoConvidado {
+  convidado_nome: string;
+  data_jogo: string;
+}
+
+// Convidado nao tem identidade rastreavel (so o nome digitado na hora, ver
+// migration 012) - agrupar por nome normalizado e a unica forma de somar
+// quantas vezes a mesma pessoa ja veio. Goleiro contratado por fora fica de
+// fora: nao e um convidado a caminho de virar fixo, e alguem pago pontualmente.
+const SQL_APARICOES_CONVIDADOS = `
+  select i.convidado_nome, p.data_jogo
+    from inscricao i
+    join partida p on p.id = i.partida_id
+   where i.removido_em is null
+     and i.tipo = 'convidado'
+     and i.goleiro_contratado = false
+     and p.status = 'fechada'
+   order by p.data_jogo
+`;
+
 export interface DadosBrutos {
   composicao: LinhaComposicao[];
   avaliacaoPorPartida: LinhaAvaliacao[];
@@ -156,6 +187,7 @@ export interface DadosBrutos {
   presenca: LinhaPresenca[];
   padrinhos: LinhaPadrinho[];
   distribuicaoNotas: LinhaDistribuicao[];
+  aparicoesConvidados: LinhaAparicaoConvidado[];
   jogadoresCadastrados: number;
 }
 
@@ -167,6 +199,7 @@ export async function buscarDadosBrutos(): Promise<DadosBrutos> {
     presenca,
     padrinhos,
     distribuicaoNotas,
+    aparicoesConvidados,
     totalJogadores,
   ] = await Promise.all([
     query<LinhaComposicao>(SQL_COMPOSICAO),
@@ -175,6 +208,7 @@ export async function buscarDadosBrutos(): Promise<DadosBrutos> {
     query<LinhaPresenca>(SQL_PRESENCA),
     query<LinhaPadrinho>(SQL_PADRINHOS),
     query<LinhaDistribuicao>(SQL_DISTRIBUICAO_NOTAS),
+    query<LinhaAparicaoConvidado>(SQL_APARICOES_CONVIDADOS),
     query<{ total: string }>('select count(*) as total from jogador'),
   ]);
 
@@ -185,6 +219,7 @@ export async function buscarDadosBrutos(): Promise<DadosBrutos> {
     presenca,
     padrinhos,
     distribuicaoNotas,
+    aparicoesConvidados,
     jogadoresCadastrados: Number(totalJogadores[0]?.total ?? 0),
   };
 }
@@ -254,6 +289,26 @@ export function montarEstatisticas(
     quantidade: Number(l.quantidade),
   }));
 
+  // Agrupa por nome normalizado (sem acento/caixa) - mesmo criterio usado em
+  // `removerConvidado` para reconhecer o mesmo convidado entre partidas.
+  const volumePorNome = new Map<string, { nome: string; vezes: number }>();
+  for (const a of dados.aparicoesConvidados) {
+    const chave = normalizarNome(a.convidado_nome);
+    const atual = volumePorNome.get(chave);
+    if (atual) {
+      atual.vezes += 1;
+    } else {
+      volumePorNome.set(chave, { nome: a.convidado_nome, vezes: 1 });
+    }
+  }
+  const volumeConvidados: VolumeConvidado[] = [...volumePorNome.values()]
+    .map((v) => ({
+      nome: v.nome,
+      vezes: v.vezes,
+      faltamParaFixo: Math.max(0, PRESENCAS_PARA_VIRAR_FIXO - v.vezes),
+    }))
+    .sort((a, b) => b.vezes - a.vezes || a.nome.localeCompare(b.nome, 'pt-BR'));
+
   const totalAvaliacoes = distribuicaoNotas.reduce((s, d) => s + d.quantidade, 0);
   const somaNotas = distribuicaoNotas.reduce((s, d) => s + d.nota * d.quantidade, 0);
   const notaMediaGeral =
@@ -274,6 +329,7 @@ export function montarEstatisticas(
     presenca,
     padrinhos,
     distribuicaoNotas,
+    volumeConvidados,
   };
 }
 
