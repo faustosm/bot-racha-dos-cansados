@@ -16,6 +16,7 @@ import {
 } from './domain/inscricao.js';
 import { isoDate, proximaAberturaFixos } from './domain/datas.js';
 import { definirNaoPerturbe, resolver } from './domain/jogador.js';
+import type { Jogador } from './domain/jogador.js';
 import {
   avaliacaoAberta,
   convidadosLiberados,
@@ -175,6 +176,28 @@ async function noPrivado(
  * convidado", para perguntar o nome de quem vai junto (scheduler.ts tem o
  * outro caso de o bot escrever primeiro - os convites de avaliacao pos-jogo).
  */
+/**
+ * Monta a sessao de quem so votou na enquete (nunca escreveu no privado), a
+ * partir do voto cru e do jogador ja resolvido. Compartilhado entre os
+ * caminhos de aviso de `tratarVotoDeEnquete`/`tratarVotoConfirmacao`: os tres
+ * precisam da mesma sessao minima so para puxar conversa.
+ */
+function sessaoDoVoto(v: VotoRecebido, votanteLid: string, jogador: Jogador): Sessao {
+  return {
+    lid: votanteLid,
+    ...(v.votanteTelefone ? { telefone: v.votanteTelefone } : {}),
+    jidPrivado: v.votanteTelefone ?? votanteLid,
+    nome: jogador.nome,
+    texto: '',
+    origem: 'grupo',
+    log: v.log,
+    jogadorId: jogador.id,
+    nomeNaLista: jogador.nome,
+    falouNoPrivado: jogador.falouNoPrivado,
+    naoPerturbe: jogador.naoPerturbe,
+  };
+}
+
 function puxarConversa(ctx: Sessao, texto: string): void {
   if (ctx.naoPerturbe) {
     ctx.log.info({ jogadorId: ctx.jogadorId }, 'nao_perturbe: mensagem nao enviada');
@@ -1106,31 +1129,16 @@ export async function tratarVotoDeEnquete(v: VotoRecebido): Promise<void> {
   );
 
   // Alem do admin, avisa quem votou: hoje ela nao recebe nada e so descobre
-  // que o voto sumiu quando reparar que nao esta na lista. Mesmo padrao de
-  // tratarVotoConfirmacao pra montar a sessao de quem so votou (nunca
-  // escreveu no privado) - puxarConversa (nao noPrivado) respeita
-  // naoPerturbe e vai pela fila espacada.
+  // que o voto sumiu quando reparar que nao esta na lista. puxarConversa
+  // (nao noPrivado) respeita naoPerturbe e vai pela fila espacada.
   const jogador = await resolver({
     lid: v.votanteLid,
     telefone: v.votanteTelefone,
     nome: v.nome ?? v.votanteLid,
     noPrivado: false,
   });
-  const ctx: Sessao = {
-    lid: v.votanteLid,
-    ...(v.votanteTelefone ? { telefone: v.votanteTelefone } : {}),
-    jidPrivado: v.votanteTelefone ?? v.votanteLid,
-    nome: jogador.nome,
-    texto: '',
-    origem: 'grupo',
-    log: v.log,
-    jogadorId: jogador.id,
-    nomeNaLista: jogador.nome,
-    falouNoPrivado: jogador.falouNoPrivado,
-    naoPerturbe: jogador.naoPerturbe,
-  };
   puxarConversa(
-    ctx,
+    sessaoDoVoto(v, v.votanteLid, jogador),
     'Seu voto não foi registrado (bug de enquete). Se era pra confirmar presença no racha, me manda "vou" aqui que eu confirmo direto. Se não, fala com os administradores.',
   );
 }
@@ -1169,10 +1177,29 @@ async function tratarVotoConfirmacao(
   const acao = interpretar(opcao);
   if (!acao) return;
 
-  // Janela ANTES de resolver identidade: voto em partida fechada nao deve nem
-  // criar cadastro de jogador.
+  // O toque foi real (WhatsApp so manda pollUpdateMessage quando a pessoa
+  // escolhe uma opcao, nunca por rolar o historico) - so que numa enquete que
+  // nao vale mais: de um racha ja fechado (a mais comum, enquete antiga ainda
+  // visivel no chat) ou de um racha que ainda nem abriu pra confirmacao. Sem
+  // aviso, o toque simplesmente nao faz nada e a pessoa acha que confirmou -
+  // caso do Marcus Vinicius, 03/09/2026: votou na enquete do racha anterior
+  // pensando que era a da semana, e so descobriu dias depois que nao estava
+  // na lista.
   if (!listaAberta(partida)) {
-    v.log.info({ partida: partida.data_jogo }, 'voto fora da janela, ignorado');
+    v.log.info({ partida: partida.data_jogo }, 'voto fora da janela, avisando quem votou');
+    const jogador = await resolver({
+      lid: v.votanteLid,
+      telefone: v.votanteTelefone,
+      nome: v.nome ?? v.votanteLid,
+      noPrivado: false,
+    });
+    const aindaNaoAbriu = new Date() < new Date(partida.abre_fixos);
+    puxarConversa(
+      sessaoDoVoto(v, v.votanteLid, jogador),
+      aindaNaoAbriu
+        ? `Essa enquete ainda não abriu pra confirmação (racha de ${rotuloData(partida.data_jogo)}). Espera abrir ou me manda "vou" aqui que eu confirmo direto.`
+        : `Essa enquete é de um racha que já fechou (${rotuloData(partida.data_jogo)}) — seu toque não valeu. Procura a enquete mais recente lá no grupo, ou me manda "vou" aqui que eu confirmo direto.`,
+    );
     return;
   }
 
@@ -1184,19 +1211,7 @@ async function tratarVotoConfirmacao(
     noPrivado: false,
   });
 
-  const ctx: Sessao = {
-    lid: v.votanteLid,
-    ...(v.votanteTelefone ? { telefone: v.votanteTelefone } : {}),
-    jidPrivado: v.votanteTelefone ?? v.votanteLid,
-    nome: jogador.nome,
-    texto: '',
-    origem: 'grupo',
-    log: v.log,
-    jogadorId: jogador.id,
-    nomeNaLista: jogador.nome,
-    falouNoPrivado: jogador.falouNoPrivado,
-    naoPerturbe: jogador.naoPerturbe,
-  };
+  const ctx: Sessao = sessaoDoVoto(v, v.votanteLid, jogador);
 
   const anterior = await votoAnterior(partida.id, ctx.jogadorId);
   v.log.info(
