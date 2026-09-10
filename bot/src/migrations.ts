@@ -379,4 +379,22 @@ export const migrations: readonly Migration[] = [
       alter table partida add column encerrando_em timestamptz;
     `,
   },
+  {
+    // Convocacao pro-ativa de goleiro (10/09/2026): o bot passa a perguntar,
+    // pra QUALQUER pessoa do grupo que escrever no privado - nao so quem ja
+    // confirmou como fixo de linha -, se ela consegue um goleiro. So uma vez
+    // por pessoa por partida, ate ela responder ou o goleiro completar
+    // (ver ofertarGoleiroSeNecessario em handlers.ts). Esta tabela e so o
+    // marcador de "ja perguntei" - nao guarda resposta nem abre excecao no
+    // teto de vagas_goleiro, que continua sendo a fonte de verdade.
+    name: '017_oferta_de_goleiro',
+    sql: `
+      create table goleiro_oferta (
+        jogador_id int  not null references jogador(id) on delete cascade,
+        partida_id int  not null references partida(id) on delete cascade,
+        criado_em  timestamptz not null default now(),
+        primary key (jogador_id, partida_id)
+      );
+    `,
+  },
 ];

@@ -89,6 +89,38 @@ export async function listarGoleiros(partidaId: number): Promise<ItemGoleiro[]> 
   }));
 }
 
+/**
+ * Ja perguntamos pra essa pessoa se ela consegue um goleiro, nesta partida?
+ *
+ * Uma vez por pessoa por partida (ver `ofertarGoleiroSeNecessario` em
+ * handlers.ts) - sem isso a pergunta repetiria a cada mensagem que a pessoa
+ * mandasse, e goleiro em falta costuma durar dias (mesmo cuidado que
+ * `alertasDeVagas`, em lista.ts, ja toma pra lista publicada no grupo).
+ */
+export async function jaOfertadoGoleiro(
+  jogadorId: number,
+  partidaId: number,
+): Promise<boolean> {
+  const r = await queryOne(
+    `select 1 from goleiro_oferta where jogador_id = $1 and partida_id = $2`,
+    [jogadorId, partidaId],
+  );
+  return r !== undefined;
+}
+
+/** Marca que a oferta ja foi feita, pra nao repetir. Idempotente. */
+export async function marcarOfertaGoleiro(
+  jogadorId: number,
+  partidaId: number,
+): Promise<void> {
+  await query(
+    `insert into goleiro_oferta (jogador_id, partida_id)
+     values ($1, $2)
+     on conflict (jogador_id, partida_id) do nothing`,
+    [jogadorId, partidaId],
+  );
+}
+
 export interface FixoConfirmado {
   readonly jogadorId: number;
   readonly telefone: string | null;

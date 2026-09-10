@@ -7,8 +7,10 @@ import {
   adicionarConvidado,
   confirmarFixo,
   desistir,
+  jaOfertadoGoleiro,
   listar,
   listarGoleiros,
+  marcarOfertaGoleiro,
   minhaInscricao,
   normalizarNome,
   removerConvidado,
@@ -429,6 +431,12 @@ async function cadastrarGoleiro(
 ): Promise<void> {
   const r = await adicionarConvidado(partida, ctx.jogadorId, nome, 'gol', {
     contratado,
+    // Contratado nao tem anfitriao de verdade (ver comentario em
+    // adicionarConvidado): quem arranjou nao precisa estar confirmado na
+    // lista de linha pra fechar um goleiro por fora. Convidado continua
+    // exigindo, e o mesmo motivo da lista de linha - quem traz precisa estar
+    // no jogo.
+    exigirAnfitriao: !contratado,
   });
   await noPrivado(
     ctx,
@@ -963,24 +971,17 @@ async function tratarQueroConvidar(
 
 /**
  * "Contratei um goleiro" / "chamei um goleiro" - a pessoa disse a intencao,
- * nao o nome. Mesmo gatilho de janela que o convidado de linha: goleiro so
- * entra pelo mesmo dialogo de convidados, so que sem ocupar vaga de linha
- * (ver `adicionarConvidado` com posicao 'gol').
+ * nao o nome. Ao contrario do convidado de linha, goleiro NAO espera a janela
+ * de quinta 12:00: e lista propria, sem teto compartilhado com os fixos, e
+ * quem organiza pode precisar fechar um goleiro contratado cedo na semana
+ * (decisao de 10/09/2026 - ate entao o gate de convidados barrava isso sem
+ * motivo, ja que goleiro nunca disputou vaga com fixo).
  */
 async function tratarQueroGoleiro(
   ctx: Sessao,
   partida: Partida,
   contratadoImplicito: boolean,
 ): Promise<void> {
-  if (!convidadosLiberados(partida)) {
-    await noPrivado(
-      ctx,
-      'Goleiro só a partir de quinta, meio-dia. Até lá a lista é dos fixos.',
-      { rodape: true },
-    );
-    return;
-  }
-
   const pergunta = [
     'Boa! Qual o nome do goleiro?',
     'Se forem dois, separe por vírgula:',
@@ -1405,12 +1406,59 @@ async function tratarNoGrupo(entrada: Contexto): Promise<void> {
   await mandar(formatarLista(partida, itens, goleiros, config.RACHA_NOME));
 }
 
+/**
+ * Depois de QUALQUER interacao no privado - nao so de quem confirmou como
+ * fixo -, oferece a chance de convocar goleiro, se ainda faltar algum.
+ *
+ * Uma vez por pessoa por partida (`jaOfertadoGoleiro`/`goleiro_oferta`): sem
+ * esse marcador a pergunta repetiria a cada mensagem enquanto o goleiro nao
+ * completasse, e falta de goleiro costuma durar dias (mesmo cuidado que
+ * `alertasDeVagas`, em domain/lista.ts, ja toma pra lista publicada no
+ * grupo).
+ *
+ * Reconfere `conversa.carregar` depois do processamento normal: se a propria
+ * mensagem acabou de abrir outro dialogo (convidado, goleiro por nome,
+ * convidado orfao...), essa pergunta ficaria pro proximo turno - abrir por
+ * cima derrubaria a resposta que a pessoa esta dando.
+ */
+async function ofertarGoleiroSeNecessario(
+  ctx: Sessao,
+  partida: Partida,
+): Promise<void> {
+  if (!listaAberta(partida)) return;
+
+  const goleiros = await listarGoleiros(partida.id);
+  if (goleiros.length >= partida.vagas_goleiro) return;
+
+  if (await jaOfertadoGoleiro(ctx.jogadorId, partida.id)) return;
+  if (await conversa.carregar(ctx.jogadorId)) return;
+
+  await marcarOfertaGoleiro(ctx.jogadorId, partida.id);
+
+  const faltam = partida.vagas_goleiro - goleiros.length;
+  const pergunta = [
+    `🧤 Ainda ${faltam === 1 ? 'falta 1 goleiro' : `faltam ${faltam} goleiros`} pro racha de ${rotuloData(partida.data_jogo)}. Você consegue algum?`,
+    'Manda o nome (ou os dois, separados por vírgula), ou responda "não".',
+  ].join('\n');
+  await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_nomes_goleiro', {
+    pergunta,
+  });
+  await noPrivado(ctx, pergunta);
+}
+
 export async function tratarMensagem(entrada: Contexto): Promise<void> {
+  const resultado = await processarPrivado(entrada);
+  if (resultado) await ofertarGoleiroSeNecessario(resultado.ctx, resultado.partida);
+}
+
+async function processarPrivado(
+  entrada: Contexto,
+): Promise<{ ctx: Sessao; partida: Partida } | undefined> {
   // O grupo e mural: anuncios do bot, conversa livre das pessoas, e so o
   // "lista" como exceção de leitura.
   if (entrada.origem === 'grupo') {
     await tratarNoGrupo(entrada);
-    return;
+    return undefined;
   }
 
   // Porta de entrada: o bot so conversa com quem e do grupo.
@@ -1426,7 +1474,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
       { telefone: entrada.telefone, texto: entrada.texto.slice(0, 40) },
       'mensagem de quem nao e membro do grupo, ignorando',
     );
-    return;
+    return undefined;
   }
 
   // Une @lid e telefone num unico jogador. Sem isso, a mesma pessoa vira dois
@@ -1456,12 +1504,12 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
       ctx,
       'Combinado — não te chamo mais por conta própria. Se eu perguntar algo e você não responder, ok. "pode chamar" religa quando quiser.',
     );
-    return;
+    return undefined;
   }
   if (intencao?.tipo === 'pode_chamar') {
     await definirNaoPerturbe(ctx.jogadorId, false);
     await noPrivado(ctx, 'Beleza, volto a te chamar quando precisar.');
-    return;
+    return undefined;
   }
 
   const partida = await partidaAtual();
@@ -1474,7 +1522,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
           : `Ainda não abriu. Abre ${rotuloData(isoDate(status.data))} ao meio-dia, pros fixos.`;
       await noPrivado(ctx, texto);
     }
-    return;
+    return undefined;
   }
 
   // Dialogo em andamento tem prioridade - "linha" so significa alguma coisa
@@ -1492,7 +1540,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
             ? partida
             : ((await partidaPorId(conv.partidaId)) ?? partida);
         await continuarDialogo(ctx, conv, daConversa);
-        return;
+        return { ctx, partida };
       }
       await conversa.limpar(ctx.jogadorId);
     }
@@ -1524,7 +1572,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
           ? partida
           : ((await partidaPorId(expirada.partidaId)) ?? partida);
       await reiniciarPergunta(ctx, daConversa, expirada);
-      return;
+      return { ctx, partida };
     }
     // Diferencia quem ja esta confirmado nesta partida (ex.: respondeu tarde
     // demais ate pra janela de graca de carregarExpiradaRecente, e a pergunta
@@ -1537,12 +1585,12 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
       ? `Não entendi "${ctx.texto.trim()}", mas você já está confirmado no racha de ${rotuloData(partida.data_jogo)} ✅.`
       : `Não entendi "${ctx.texto.trim()}". Você ainda não confirmou presença nesse racha — é só tocar em "✅ Vou" na enquete do grupo, ou me mandar "vou" aqui mesmo.`;
     await noPrivado(ctx, `${abertura}\n\n${AJUDA}`);
-    return;
+    return { ctx, partida };
   }
 
   if (intencao.tipo === 'ajuda') {
     await noPrivado(ctx, AJUDA);
-    return;
+    return { ctx, partida };
   }
 
   if (intencao.tipo === 'lista') {
@@ -1553,7 +1601,7 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
     await noPrivado(ctx, formatarLista(partida, itens, goleiros, config.RACHA_NOME), {
       rodape: true,
     });
-    return;
+    return { ctx, partida };
   }
 
   if (!listaAberta(partida)) {
@@ -1562,29 +1610,29 @@ export async function tratarMensagem(entrada: Contexto): Promise<void> {
       `A lista do racha de ${partida.data_jogo} não está aberta agora.`,
       { rodape: true },
     );
-    return;
+    return { ctx, partida };
   }
 
   switch (intencao.tipo) {
     case 'confirmar':
       await tratarConfirmar(ctx, partida);
-      return;
+      return { ctx, partida };
     case 'desistir':
       await tratarDesistir(ctx, partida);
-      return;
+      return { ctx, partida };
     case 'convidados':
       await tratarConvidados(ctx, partida, intencao.nomes);
-      return;
+      return { ctx, partida };
     case 'quero_convidar':
       await tratarQueroConvidar(ctx, partida);
-      return;
+      return { ctx, partida };
     case 'quero_goleiro':
       await tratarQueroGoleiro(ctx, partida, intencao.contratadoImplicito);
-      return;
+      return { ctx, partida };
     case 'tirar_convidado':
       await tratarTirarConvidado(ctx, partida, intencao.nome);
-      return;
+      return { ctx, partida };
     default:
-      return; // posicao/negativa fora de dialogo: nao significam nada.
+      return { ctx, partida }; // posicao/negativa fora de dialogo: nao significam nada.
   }
 }
