@@ -26,9 +26,10 @@ const dadosBase: DadosBrutos = {
     { nota: 5, quantidade: '21' },
   ],
   aparicoesConvidados: [
-    { convidado_nome: 'Carlos', data_jogo: '2026-08-15' },
-    { convidado_nome: 'carlos', data_jogo: '2026-08-22' },
-    { convidado_nome: 'Diego', data_jogo: '2026-08-15' },
+    { convidado_nome: 'Carlos', data_jogo: '2026-08-15', anfitriao: 'Ana' },
+    { convidado_nome: 'carlos', data_jogo: '2026-08-22', anfitriao: 'Ana' },
+    { convidado_nome: 'Carlos', data_jogo: '2026-08-15', anfitriao: 'Bruno' },
+    { convidado_nome: 'Diego', data_jogo: '2026-08-15', anfitriao: 'Ana' },
   ],
   jogadoresCadastrados: 10,
 };
@@ -80,11 +81,18 @@ describe('montarEstatisticas', () => {
     assert.equal(r.resumo.rachasRealizados, 0);
   });
 
-  it('agrupa volume de convidados por nome normalizado (sem acento/caixa) e conta quanto falta pra virar fixo', () => {
+  it('agrupa volume de convidados por PAR (padrinho, nome normalizado), nao so pelo nome', () => {
     const r = montarEstatisticas(dadosBase, new Date());
+    // Carlos trazido pela Ana 2x (nome normalizado casa "Carlos"/"carlos") vira
+    // uma linha so; Carlos trazido pelo Bruno 1x e OUTRA linha - mesmo nome,
+    // padrinho diferente, tratado como pessoa possivelmente diferente.
     assert.deepEqual(
-      r.volumeConvidados.map((v) => [v.nome, v.vezes, v.faltamParaFixo]),
-      [['Carlos', 2, 1], ['Diego', 1, 2]],
+      r.volumeConvidados.map((v) => [v.anfitriao, v.nome, v.vezes, v.faltamParaFixo]),
+      [
+        ['Ana', 'Carlos', 2, 1],
+        ['Bruno', 'Carlos', 1, 2],
+        ['Ana', 'Diego', 1, 2],
+      ],
     );
   });
 
@@ -92,13 +100,18 @@ describe('montarEstatisticas', () => {
     const dados: DadosBrutos = {
       ...dadosBase,
       aparicoesConvidados: [
-        { convidado_nome: 'Elias', data_jogo: '2026-08-01' },
-        { convidado_nome: 'Elias', data_jogo: '2026-08-08' },
-        { convidado_nome: 'Elias', data_jogo: '2026-08-15' },
-        { convidado_nome: 'Elias', data_jogo: '2026-08-22' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-01', anfitriao: 'Ana' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-08', anfitriao: 'Ana' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-15', anfitriao: 'Ana' },
+        { convidado_nome: 'Elias', data_jogo: '2026-08-22', anfitriao: 'Ana' },
       ],
     };
     const r = montarEstatisticas(dados, new Date());
-    assert.deepEqual(r.volumeConvidados[0], { nome: 'Elias', vezes: 4, faltamParaFixo: 0 });
+    assert.deepEqual(r.volumeConvidados[0], {
+      nome: 'Elias',
+      anfitriao: 'Ana',
+      vezes: 4,
+      faltamParaFixo: 0,
+    });
   });
 });

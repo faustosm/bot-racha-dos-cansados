@@ -42,8 +42,20 @@ export interface DistribuicaoNota {
   quantidade: number;
 }
 
+/**
+ * Uma linha por PAR (padrinho, convidado) - nao por nome de convidado sozinho.
+ *
+ * Convidado nao tem identidade propria no banco, so o nome digitado na hora
+ * (ver migration 012). Agrupar so pelo nome escondia o caso comum: dois
+ * padrinhos diferentes trazendo gente diferente que por acaso se chama igual
+ * (ex.: "Vinicius" trazido por Rhandlley 2x, por Junior Mamedio 1x e por
+ * Rafael Mendes 1x - decisao de 11/09/2026, muito provavelmente 3 pessoas
+ * distintas, nao uma so que veio 4x). O par (padrinho, nome) e a melhor
+ * aproximacao disponivel de "mesma pessoa" sem pedir telefone de convidado.
+ */
 export interface VolumeConvidado {
   nome: string;
+  anfitriao: string;
   vezes: number;
   faltamParaFixo: number;
 }
@@ -163,6 +175,10 @@ const SQL_DISTRIBUICAO_NOTAS = `
 interface LinhaAparicaoConvidado {
   convidado_nome: string;
   data_jogo: string;
+  /** Quem trouxe NESSA aparicao especifica - o mesmo nome digitado pode ter
+   * sido trazido por padrinhos diferentes em semanas diferentes (ver
+   * `VolumeConvidado.porAnfitriao`). */
+  anfitriao: string;
 }
 
 // Convidado nao tem identidade rastreavel (so o nome digitado na hora, ver
@@ -170,9 +186,11 @@ interface LinhaAparicaoConvidado {
 // quantas vezes a mesma pessoa ja veio. Goleiro contratado por fora fica de
 // fora: nao e um convidado a caminho de virar fixo, e alguem pago pontualmente.
 const SQL_APARICOES_CONVIDADOS = `
-  select i.convidado_nome, p.data_jogo
+  select i.convidado_nome, p.data_jogo,
+         coalesce(jc.nome_escolhido, jc.nome) as anfitriao
     from inscricao i
     join partida p on p.id = i.partida_id
+    join jogador jc on jc.id = i.convidado_de_id
    where i.removido_em is null
      and i.tipo = 'convidado'
      and i.goleiro_contratado = false
@@ -289,25 +307,40 @@ export function montarEstatisticas(
     quantidade: Number(l.quantidade),
   }));
 
-  // Agrupa por nome normalizado (sem acento/caixa) - mesmo criterio usado em
-  // `removerConvidado` para reconhecer o mesmo convidado entre partidas.
-  const volumePorNome = new Map<string, { nome: string; vezes: number }>();
+  // Agrupa por PAR (padrinho, nome normalizado) - nao so pelo nome. O nome
+  // digitado sozinho (normalizado por `normalizarNome`, mesmo criterio de
+  // `removerConvidado`) nao prova que e sempre a mesma pessoa; o padrinho que
+  // trouxe e a melhor aproximacao disponivel disso.
+  const volumePorPar = new Map<
+    string,
+    { nome: string; anfitriao: string; vezes: number }
+  >();
   for (const a of dados.aparicoesConvidados) {
-    const chave = normalizarNome(a.convidado_nome);
-    const atual = volumePorNome.get(chave);
+    const chave = `${normalizarNome(a.convidado_nome)}|${a.anfitriao}`;
+    const atual = volumePorPar.get(chave);
     if (atual) {
       atual.vezes += 1;
     } else {
-      volumePorNome.set(chave, { nome: a.convidado_nome, vezes: 1 });
+      volumePorPar.set(chave, {
+        nome: a.convidado_nome,
+        anfitriao: a.anfitriao,
+        vezes: 1,
+      });
     }
   }
-  const volumeConvidados: VolumeConvidado[] = [...volumePorNome.values()]
+  const volumeConvidados: VolumeConvidado[] = [...volumePorPar.values()]
     .map((v) => ({
       nome: v.nome,
+      anfitriao: v.anfitriao,
       vezes: v.vezes,
       faltamParaFixo: Math.max(0, PRESENCAS_PARA_VIRAR_FIXO - v.vezes),
     }))
-    .sort((a, b) => b.vezes - a.vezes || a.nome.localeCompare(b.nome, 'pt-BR'));
+    .sort(
+      (a, b) =>
+        b.vezes - a.vezes ||
+        a.nome.localeCompare(b.nome, 'pt-BR') ||
+        a.anfitriao.localeCompare(b.anfitriao, 'pt-BR'),
+    );
 
   const totalAvaliacoes = distribuicaoNotas.reduce((s, d) => s + d.quantidade, 0);
   const somaNotas = distribuicaoNotas.reduce((s, d) => s + d.nota * d.quantidade, 0);
