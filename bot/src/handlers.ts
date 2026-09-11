@@ -23,7 +23,6 @@ import {
   avaliacaoAberta,
   convidadosLiberados,
   definirStatus,
-  diaDeAvisarSaida,
   listaAberta,
   partidaAtual,
   partidaParaLeitura,
@@ -339,19 +338,25 @@ async function registrarEntradaConvidado(
 /**
  * Registra uma SAIDA.
  *
- * So publica sexta ou sabado (decisao de 13/08/2026): e quando uma vaga
- * liberada ainda da tempo de repor alguem antes do jogo. Quarta/quinta fica
- * em silencio - o digest das 19:00 ja cobre, e sobra a semana inteira pra
- * reposicao.
+ * So publica quando a saida ABRE VAGA numa posicao que estava no teto
+ * (`abriuVaga` - ver `Desistencia`/`Remocao` em domain/inscricao.ts): e a
+ * unica hora em que tem gente esperando essa vaga especificamente. Se a lista
+ * ja tinha vaga sobrando, a saida nao destrava nada pra ninguem - o digest das
+ * 19:00 ja cobre.
+ *
+ * Decisao de 11/09/2026, substituindo a regra antiga (so sexta/sabado): uma
+ * saida de quinta a noite, DEPOIS do digest, ficava sem nenhum aviso ate a
+ * proxima sexta mesmo tendo lotado - caso do Thiago Miranda, 10/09/2026.
  */
 async function registrarSaida(
   ctx: Sessao,
   partida: Partida,
   cabecalho: string,
+  abriuVaga: boolean,
 ): Promise<void> {
   const itens = await listar(partida.id);
   await sincronizarStatus(partida, itens);
-  if (!diaDeAvisarSaida()) return;
+  if (!abriuVaga) return;
   await publicarLista(ctx, partida, cabecalho);
 }
 
@@ -871,7 +876,7 @@ async function tratarDesistir(
   const extra = n > 0 ? ` (levou ${n} convidado${n > 1 ? 's' : ''} junto)` : '';
 
   const cabecalho = `❌ ${ctx.nomeNaLista} não vai mais${extra}. Liberou vaga!`;
-  await registrarSaida(ctx, partida, cabecalho);
+  await registrarSaida(ctx, partida, cabecalho, r.valor.abriuVaga);
 
   if (n === 0) return;
 
@@ -1045,6 +1050,7 @@ async function tratarTirarConvidado(
     ctx,
     partida,
     `❌ ${r.nome} (convidado de ${ctx.nomeNaLista}) não vai mais. Liberou vaga!`,
+    r.abriuVaga,
   );
 }
 

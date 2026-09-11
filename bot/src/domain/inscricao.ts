@@ -308,6 +308,24 @@ export async function confirmarFixo(
 export interface Desistencia {
   /** Posicao de quem saiu. Goleiro saindo e o pior caso e merece alerta. */
   readonly posicao: Posicao;
+  /**
+   * A vaga dela era a UNICA fechada no teto da propria posicao (18 de linha,
+   * ou vagas_goleiro de gol) - a saida agora abre a primeira vaga livre.
+   *
+   * Calculado ANTES de remover, na mesma contagem travada (`contarComLock`)
+   * que toda entrada usa pra decidir se cabe - simetrico a `Confirmacao.lotouAgora`
+   * e pelo mesmo motivo: se dependesse da coluna `status`, uma correcao manual
+   * no banco que deixasse `status` desalinhado engoliria o aviso em silencio.
+   *
+   * Decisao de 11/09/2026: antes disso o aviso de saida saia so sexta/sabado
+   * (`diaDeAvisarSaida`, removida) - so que uma saida de quinta a noite, DEPOIS
+   * do digest das 19h, ficava sem aviso nenhum ate a proxima sexta, mesmo tendo
+   * sido a vaga que destravou a lista pra quem estava esperando (caso do
+   * Thiago Miranda, 10/09/2026). O sinal certo nao e o dia da semana, e ter
+   * destravado ou nao - se a lista ja tinha vaga sobrando, ninguem tava
+   * esperando, e o digest normal cobre.
+   */
+  readonly abriuVaga: boolean;
   /** Convidados que sairam junto - o bot pergunta depois se algum fica. */
   readonly convidados: readonly {
     id: number;
@@ -322,6 +340,10 @@ export async function desistir(
   jogadorId: number,
 ): Promise<Resultado<Desistencia>> {
   return transaction(async (client) => {
+    // Conta ANTES de remover: depois da saida a contagem ja nao reflete mais
+    // se a vaga dela era a ultima fechada.
+    const antes = await contarComLock(client, partida.id);
+
     const eu = await client.query<{ posicao: Posicao }>(
       `update inscricao set removido_em = now()
         where partida_id = $1 and jogador_id = $2 and removido_em is null
@@ -332,6 +354,10 @@ export async function desistir(
     if (!minhaPosicao) {
       return erro<Desistencia>('Você não estava na lista.');
     }
+
+    const teto = minhaPosicao === 'gol' ? partida.vagas_goleiro : partida.vagas_total;
+    const ocupadasAntes = minhaPosicao === 'gol' ? antes.gols : antes.linha;
+    const abriuVaga = teto > 0 && ocupadasAntes >= teto;
 
     // Saem junto por padrao: e o desfecho mais provavel, e libera vaga na
     // hora. O bot pergunta em seguida se algum deles vai mesmo assim - assim,
@@ -349,6 +375,7 @@ export async function desistir(
     );
     return ok({
       posicao: minhaPosicao,
+      abriuVaga,
       convidados: convidados.rows.map((r) => ({
         id: r.id,
         nome: r.convidado_nome,
@@ -409,7 +436,13 @@ export async function adicionarConvidado(
 
 /** Como o pedido de remocao terminou, para quem chama montar a resposta. */
 export type Remocao =
-  | { readonly tipo: 'removido'; readonly nome: string }
+  | {
+      readonly tipo: 'removido';
+      readonly nome: string;
+      readonly posicao: Posicao;
+      /** Mesmo calculo e mesmo motivo de `Desistencia.abriuVaga`. */
+      readonly abriuVaga: boolean;
+    }
   | { readonly tipo: 'sem_convidados' }
   | { readonly tipo: 'nao_encontrado'; readonly seus: readonly string[] }
   | { readonly tipo: 'ambiguo'; readonly nome: string; readonly quantos: number };
@@ -430,8 +463,12 @@ export async function removerConvidado(
   nome: string,
 ): Promise<Remocao> {
   return transaction(async (client) => {
-    const { rows } = await client.query<{ id: number; convidado_nome: string }>(
-      `select id, convidado_nome from inscricao
+    const { rows } = await client.query<{
+      id: number;
+      convidado_nome: string;
+      posicao: Posicao;
+    }>(
+      `select id, convidado_nome, posicao from inscricao
         where partida_id = $1 and convidado_de_id = $2 and removido_em is null
         order by criado_em, id`,
       [partida.id, anfitriaoId],
@@ -457,10 +494,22 @@ export async function removerConvidado(
     }
 
     const unico = casam[0]!;
+    // Conta ANTES de remover - mesmo motivo de `desistir`: depois da saida a
+    // contagem ja nao reflete mais se a vaga dele era a ultima fechada.
+    const antes = await contarComLock(client, partida.id);
+    const teto = unico.posicao === 'gol' ? partida.vagas_goleiro : partida.vagas_total;
+    const ocupadasAntes = unico.posicao === 'gol' ? antes.gols : antes.linha;
+    const abriuVaga = teto > 0 && ocupadasAntes >= teto;
+
     await client.query('update inscricao set removido_em = now() where id = $1', [
       unico.id,
     ]);
-    return { tipo: 'removido', nome: unico.convidado_nome };
+    return {
+      tipo: 'removido',
+      nome: unico.convidado_nome,
+      posicao: unico.posicao,
+      abriuVaga,
+    };
   });
 }
 

@@ -228,16 +228,6 @@ export function convidadosLiberados(
   return agora >= new Date(partida.abre_convidados);
 }
 
-/**
- * Sexta e sabado: ultimos dias com tempo de repor quem desistiu antes do
- * jogo. Quarta e quinta ainda sobra a semana inteira - avisar toda saida
- * nesses dias so polui o grupo a toa (o digest das 19h ja cobre).
- */
-export function diaDeAvisarSaida(agora = new Date()): boolean {
-  const dia = agora.getDay();
-  return dia === 5 || dia === 6;
-}
-
 export function listaAberta(partida: Partida, agora = new Date()): boolean {
   return (
     partida.status !== 'fechada' &&
