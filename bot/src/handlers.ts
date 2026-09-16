@@ -1,7 +1,7 @@
 import { config } from './config.js';
 import { sendText } from './evolution/client.js';
-import { normalizar, parse, separarNomes } from './commands/parse.js';
-import type { Intencao } from './commands/parse.js';
+import { normalizar, parse, parseAdmin, separarNomes } from './commands/parse.js';
+import type { ComandoAdmin, Intencao } from './commands/parse.js';
 import * as conversa from './conversa.js';
 import {
   adicionarConvidado,
@@ -17,7 +17,7 @@ import {
   restaurarInscricao,
 } from './domain/inscricao.js';
 import { isoDate, proximaAberturaFixos } from './domain/datas.js';
-import { definirNaoPerturbe, resolver } from './domain/jogador.js';
+import { buscarPorNome, definirNaoPerturbe, resolver } from './domain/jogador.js';
 import type { Jogador } from './domain/jogador.js';
 import {
   avaliacaoAberta,
@@ -303,6 +303,12 @@ async function registrarEntrada(
   ctx: Sessao,
   partida: Partida,
   lotouAgora: boolean,
+  /**
+   * Quem entrou. Nem sempre e quem mandou a mensagem: pelo comando de admin
+   * (`tratarAdmin`) uma pessoa inscreve outra, e o anuncio de lista fechada
+   * tem que dizer o nome de quem ocupou a vaga, nao o de quem digitou.
+   */
+  quemEntrou: string = ctx.nomeNaLista,
 ): Promise<void> {
   const itens = await listar(partida.id);
   await sincronizarStatus(partida, itens);
@@ -311,7 +317,7 @@ async function registrarEntrada(
   // O cabecalho NAO repete "lista completa": `publicarLista` ja acrescenta o
   // alerta, e o rodape da lista tambem diz. Antes a mesma frase saia tres
   // vezes na mesma mensagem.
-  await publicarLista(ctx, partida, `📣 ${ctx.nomeNaLista} fechou a lista!`);
+  await publicarLista(ctx, partida, `📣 ${quemEntrou} fechou a lista!`);
 }
 
 /**
@@ -1055,6 +1061,153 @@ async function tratarTirarConvidado(
 }
 
 // ---------------------------------------------------------------------------
+// Comando de admin
+// ---------------------------------------------------------------------------
+
+const AJUDA_ADMIN = [
+  '🔧 Comando de admin (só responde pro seu número):',
+  '',
+  '  "admin add Fulano"',
+  '    põe na lista, como fixo de linha, alguém que o bot já conhece.',
+  '',
+  'Serve pra quem não consegue votar na enquete — sem o celular na mão, por exemplo.',
+  'Use o nome como ele aparece na lista; se houver mais de um parecido, eu pergunto.',
+  'Não anuncio nada no grupo na hora: a lista sai às 19:00, como sempre, ou na hora em que as vagas fecharem.',
+].join('\n');
+
+/**
+ * Digitos do telefone dentro de um JID: "5534..:12@s.whatsapp.net" -> "5534..".
+ *
+ * Devolve vazio para @lid: o LID tambem e uma sequencia de digitos, e sem
+ * este corte ele entraria na comparacao como se fosse telefone.
+ */
+function digitosDoTelefone(jid: string): string {
+  if (jid.endsWith('@lid')) return '';
+  return (jid.split('@')[0] ?? '').split(':')[0]?.replace(/\D/g, '') ?? '';
+}
+
+/**
+ * A mensagem veio do telefone que administra o racha?
+ *
+ * Compara so os digitos porque o mesmo numero chega escrito de formas
+ * diferentes conforme o canal. O LID NAO serve de credencial aqui: e opaco,
+ * muda por grupo e nao e o que esta no .env - a autorizacao e sempre pelo
+ * telefone (`ADMIN_TELEFONE`), e vazio desliga o comando por completo.
+ */
+function ehAdmin(ctx: Sessao): boolean {
+  const esperado = digitosDoTelefone(config.ADMIN_TELEFONE);
+  if (!esperado) return false;
+  // `jidPrivado` junto com `telefone` porque nem toda mensagem privada traz
+  // os dois campos preenchidos (ver `Contexto`) - no privado o jidPrivado e o
+  // proprio remetente, entao os dois apontam para a mesma pessoa.
+  return [ctx.telefone, ctx.jidPrivado].some(
+    (jid) => jid !== undefined && digitosDoTelefone(jid) === esperado,
+  );
+}
+
+/**
+ * Inscreve na lista alguem que nao consegue votar na enquete.
+ *
+ * O caso real: 16/09/2026, o Wibio estava sem o aparelho em maos e a
+ * inscricao dele teve que ser feita na mao, direto no banco. Votar por
+ * terceiro e impossivel - o voto do WhatsApp e cifrado e assinado com o JID
+ * de quem vota (ver domain/voto.ts) -, entao o caminho tem que ser este.
+ *
+ * Passa pelo MESMO `confirmarFixo` de qualquer confirmacao: mesma trava,
+ * mesmo teto de vagas, mesma idempotencia. E, como qualquer confirmacao de
+ * fixo, e silencioso no grupo - a lista so sai no digest das 19:00 ou no
+ * momento em que esta entrada fecha as vagas (`lotouAgora`).
+ *
+ * Duas ausencias deliberadas:
+ *
+ *   - o voto NAO e registrado (`registrarVoto`): a pessoa nao votou, e a
+ *     tabela `voto` alimenta a contagem de votantes das estatisticas.
+ *   - a pessoa inscrita NAO recebe mensagem: ela pode estar justamente sem o
+ *     celular, e pode nunca ter falado com o bot - puxar conversa com quem
+ *     nunca escreveu e o que derruba o numero (ver `puxarConversa`).
+ */
+async function tratarAdmin(
+  ctx: Sessao,
+  partida: Partida,
+  cmd: ComandoAdmin,
+): Promise<void> {
+  if (cmd.tipo === 'ajuda') {
+    await noPrivado(ctx, AJUDA_ADMIN);
+    return;
+  }
+
+  // Mesma janela de todo mundo: inscrever antes de a lista abrir furaria a
+  // ordem de chegada dos fixos, que e o controle que o grupo usa.
+  if (!listaAberta(partida)) {
+    await noPrivado(
+      ctx,
+      `A lista de ${rotuloData(partida.data_jogo)} não está aberta agora — não dá pra inscrever ninguém.`,
+      { rodape: true },
+    );
+    return;
+  }
+
+  const candidatos = await buscarPorNome(cmd.nome);
+
+  if (!candidatos.length) {
+    await noPrivado(
+      ctx,
+      [
+        `Não achei ninguém chamado "${cmd.nome}".`,
+        'Só consigo inscrever quem eu já conheço: quem já votou na enquete ou já falou comigo alguma vez.',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  if (candidatos.length > 1) {
+    await noPrivado(
+      ctx,
+      [
+        `Tem mais de um "${cmd.nome}":`,
+        ...candidatos.map((c) => `  ${c.nome}`),
+        '',
+        'Manda o nome completo, como ele aparece na lista.',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  const alvo = candidatos[0];
+  if (!alvo) return;
+
+  const r = await confirmarFixo(partida, alvo.id, 'linha');
+  if (!r.ok) {
+    await noPrivado(ctx, `${alvo.nome}: ${r.motivo}`, { rodape: true });
+    return;
+  }
+
+  if (r.valor.jaEstava) {
+    await noPrivado(ctx, `${alvo.nome} já está na lista ✅.`, { rodape: true });
+    return;
+  }
+
+  ctx.log.info(
+    { admin: ctx.nomeNaLista, alvo: alvo.nome, partida: partida.data_jogo },
+    'admin inscreveu jogador na lista',
+  );
+
+  // Publica no grupo SE, e so se, esta entrada fechou as vagas - a mesma
+  // regra de qualquer confirmacao. A resposta ao admin vem depois, para nao
+  // dizer "nao anunciei" um instante antes de anunciar.
+  await registrarEntrada(ctx, partida, r.valor.lotouAgora, alvo.nome);
+
+  const vagas = contarVagas(await listar(partida.id), partida.vagas_total);
+  await noPrivado(
+    ctx,
+    r.valor.lotouAgora
+      ? `Coloquei ${alvo.nome} na lista ✅ — e com ele fechou (${vagas.ocupadas}/${vagas.total}), então publiquei no grupo.`
+      : `Coloquei ${alvo.nome} na lista ✅ (${vagas.ocupadas}/${vagas.total}). Não anunciei no grupo — a lista sai às 19:00.`,
+    { rodape: true },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Voto na enquete do grupo
 // ---------------------------------------------------------------------------
 
@@ -1529,6 +1682,21 @@ async function processarPrivado(
       await noPrivado(ctx, texto);
     }
     return undefined;
+  }
+
+  // Comando de admin ANTES do dialogo em andamento: e um comando forte, como
+  // "lista". Sem isso, um "admin add Fulano" mandado no meio de uma pergunta
+  // do bot ("quem e o goleiro?") viraria resposta daquela pergunta - e o
+  // Fulano entraria como convidado goleiro do proprio admin.
+  //
+  // O reconhecimento so acontece para o telefone autorizado: para qualquer
+  // outra pessoa o texto segue o caminho normal (e cai no "nao entendi"),
+  // sem revelar que o comando existe.
+  const comandoAdmin = ehAdmin(ctx) ? parseAdmin(ctx.texto) : undefined;
+  if (comandoAdmin) {
+    await conversa.limpar(ctx.jogadorId);
+    await tratarAdmin(ctx, partida, comandoAdmin);
+    return { ctx, partida };
   }
 
   // Dialogo em andamento tem prioridade - "linha" so significa alguma coisa

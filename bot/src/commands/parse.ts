@@ -297,3 +297,43 @@ export function parse(textoOriginal: string): Intencao | undefined {
   // sentidos. O bot pergunta com as palavras, entao a palavra basta.
   return undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Comando de admin
+// ---------------------------------------------------------------------------
+
+/**
+ * Vocabulario que so vale para o telefone do admin (ADMIN_TELEFONE, checado
+ * em handlers.ts - aqui a funcao continua pura).
+ *
+ * Fica FORA de `parse` de proposito: "adicionar o Joao" ja significa outra
+ * coisa para o grupo inteiro - e convite de convidado ("vou levar o Joao", ver
+ * RE_CONVIDAR). Se as duas gramaticas se misturassem, o mesmo texto teria dois
+ * sentidos conforme quem digitou, e quem organiza acabaria cadastrando
+ * convidado achando que inscreveu fixo. Por isso o prefixo "admin" e
+ * obrigatorio.
+ */
+export type ComandoAdmin =
+  /** "admin" sozinho, ou verbo que nao conheco: devolve a sintaxe. */
+  | { tipo: 'ajuda' }
+  /** Poe na lista, como fixo de linha, alguem que ja e cadastrado. */
+  | { tipo: 'add'; nome: string };
+
+const RE_ADMIN = /^admin\b\s*(.*)$/i;
+
+// Mesma variedade de verbos que o resto do parser aceita: quem organiza
+// tambem nao vai lembrar de uma palavra exata.
+const RE_ADMIN_ADD =
+  /^(?:add|adiciona|adicionar|adiciono|inclui|incluir|coloca|colocar|bota|botar|p[oõ]e|por|confirma|confirmar)\s+(.*)$/i;
+
+export function parseAdmin(textoOriginal: string): ComandoAdmin | undefined {
+  const m = RE_ADMIN.exec(textoOriginal.trim());
+  if (!m) return undefined;
+
+  const add = RE_ADMIN_ADD.exec((m[1] ?? '').trim());
+  if (!add) return { tipo: 'ajuda' };
+
+  // "admin add o Fulano" -> "Fulano" (mesma limpeza dos convites).
+  const nome = limparNome(add[1] ?? '');
+  return nome ? { tipo: 'add', nome } : { tipo: 'ajuda' };
+}

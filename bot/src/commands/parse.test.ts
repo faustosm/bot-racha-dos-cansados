@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizar, parse, separarNomes } from './parse.js';
+import { normalizar, parse, parseAdmin, separarNomes } from './parse.js';
 
 describe('normalizar', () => {
   it('tira acento, caixa e pontuacao final', () => {
@@ -298,5 +298,41 @@ describe('parse - tirar convidado pelo nome', () => {
     // Se a ordem de checagem inverter, quem quer sair tira um convidado.
     assert.deepEqual(parse('não vou mais'), { tipo: 'desistir' });
     assert.deepEqual(parse('fora'), { tipo: 'desistir' });
+  });
+});
+
+describe('parseAdmin', () => {
+  it('reconhece o pedido de inscricao com o nome', () => {
+    assert.deepEqual(parseAdmin('admin add Wibio'), { tipo: 'add', nome: 'Wibio' });
+    assert.deepEqual(parseAdmin('Admin adiciona o Wibio'), {
+      tipo: 'add',
+      nome: 'Wibio',
+    });
+    assert.deepEqual(parseAdmin('admin coloca José Mário'), {
+      tipo: 'add',
+      nome: 'José Mário',
+    });
+  });
+
+  it('"admin" sozinho, ou sem nome, devolve a ajuda', () => {
+    assert.deepEqual(parseAdmin('admin'), { tipo: 'ajuda' });
+    assert.deepEqual(parseAdmin('admin add'), { tipo: 'ajuda' });
+    assert.deepEqual(parseAdmin('admin add o'), { tipo: 'ajuda' });
+    assert.deepEqual(parseAdmin('admin qualquer coisa'), { tipo: 'ajuda' });
+  });
+
+  // A razao de existir o prefixo: sem ele, a frase que o grupo inteiro usa
+  // para convidar viraria comando de admin na mao de quem organiza.
+  it('sem o prefixo "admin", nao e comando de admin', () => {
+    assert.equal(parseAdmin('adicionar o Wibio'), undefined);
+    assert.equal(parseAdmin('vou levar o Wibio'), undefined);
+    assert.equal(parseAdmin('administrador add Wibio'), undefined);
+  });
+
+  it('e a frase de convite continua sendo convite no parser normal', () => {
+    assert.deepEqual(parse('adicionar o Wibio'), {
+      tipo: 'convidados',
+      nomes: ['Wibio'],
+    });
   });
 });

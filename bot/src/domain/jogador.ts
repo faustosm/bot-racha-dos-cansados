@@ -1,5 +1,8 @@
 import type { PoolClient } from 'pg';
 import { query, queryOne, transaction } from '../db.js';
+// Uma unica regra de "mesmo nome" no projeto: a que ja decide se um
+// convidado casa com o nome digitado (`removerConvidado`).
+import { normalizarNome } from './inscricao.js';
 
 // A mesma pessoa aparece com identificadores diferentes conforme o canal:
 //
@@ -212,5 +215,36 @@ export async function definirNaoPerturbe(
   ]);
 }
 
+export interface JogadorEncontrado {
+  readonly id: number;
+  /** Como ele aparece na lista (nome escolhido, ou o pushName). */
+  readonly nome: string;
+}
 
+/**
+ * Procura cadastros pelo nome que aparece na lista.
+ *
+ * Em memoria, e nao em SQL, por causa do acento: "jose" tem que achar "José",
+ * e o `like` do Postgres nao normaliza (unaccent nao esta instalada). Sao
+ * algumas dezenas de cadastros - o custo e irrelevante, e a regra de
+ * comparacao fica sendo a MESMA de `removerConvidado` (`normalizarNome`), em
+ * vez de uma segunda definicao de "mesmo nome" no projeto.
+ *
+ * Match exato primeiro: quem se chama "Tiago" nao pode virar ambiguo so
+ * porque existe um "Tiago Juliano" no grupo.
+ */
+export async function buscarPorNome(termo: string): Promise<JogadorEncontrado[]> {
+  const alvo = normalizarNome(termo);
+  if (!alvo) return [];
 
+  const rows = await query<JogadorEncontrado>(
+    `select id, coalesce(nome_escolhido, nome) as nome
+       from jogador
+      order by nome`,
+  );
+
+  const exatos = rows.filter((r) => normalizarNome(r.nome) === alvo);
+  if (exatos.length) return exatos;
+
+  return rows.filter((r) => normalizarNome(r.nome).includes(alvo));
+}
