@@ -29,6 +29,12 @@ const schema = z.object({
   // aconteceu em 20-21/08/2026, ver commit da reserva atomica de abertura).
   ADMIN_TELEFONE: z.string().default(''),
 
+  // Grupo de quem organiza o racha ("Comite de Qualidade e Tecnologia RC"),
+  // separado do grupo do jogo. E so canal de SAIDA: o bot avisa la, mas
+  // continua respondendo apenas no GROUP_JID e no privado (ver server.ts,
+  // que ignora mensagem de qualquer outro grupo). Vazio desliga o aviso.
+  GRUPO_ADMIN_JID: z.string().default(''),
+
   // --- Identidade do racha (aparece na enquete e nos anuncios) --------------
   RACHA_NOME: z.string().default('Racha'),
   RACHA_LOCAL: z.string().default(''),
@@ -51,6 +57,10 @@ const schema = z.object({
   // Quarta a sexta as 19:00 - unica hora em que o grupo recebe a lista sem que
   // nada tenha acontecido. Confirmacao nao gera mensagem; so saida gera.
   CRON_DIGEST: z.string().default('0 19 * * 3-5'),
+  // Quarta 11:59 - um minuto antes de CRON_ABRE_FIXOS. Avisa o grupo do
+  // comite (GRUPO_ADMIN_JID) e cada um dos participantes dele no privado, pra
+  // ninguem perder a hora de marcar presenca quando a enquete sair.
+  CRON_AVISO_ABERTURA: z.string().default('59 11 * * 3'),
 
   // Quando avisar que as vagas estao acabando.
   ALERTA_VAGAS: z.coerce.number().int().nonnegative().default(2),

@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { config } from './config.js';
-import { sendPoll, sendText } from './evolution/client.js';
+import { fetchGroupParticipants, sendPoll, sendText } from './evolution/client.js';
 import { listar, listarFixosConfirmados, listarGoleiros } from './domain/inscricao.js';
 import {
   definirStatus,
@@ -28,7 +28,7 @@ import {
   rotuloData,
 } from './domain/lista.js';
 import { limparExpiradas, marcarAvisoExpiracao, proximasAExpirar } from './conversa.js';
-import { buscarPorId } from './domain/jogador.js';
+import { buscarPorId, buscarPorTelefone } from './domain/jogador.js';
 import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
 import { publicarEstatisticas } from './estatisticas.js';
@@ -186,6 +186,119 @@ async function abrirParaConvidados(log: Log): Promise<void> {
       '',
       formatarLista(partida, itens, goleiros, config.RACHA_NOME),
     ].join('\n'),
+  );
+}
+
+/**
+ * Texto do lembrete de que a lista vai abrir.
+ *
+ * `noPrivado` acrescenta a valvula de escape: DM e mensagem que o BOT inicia,
+ * e toda mensagem desse tipo precisa dizer como desligar (mesma regra de
+ * `puxarConversa`, em handlers.ts). No grupo isso nao cabe - "nao perturbe" e
+ * uma preferencia individual, respondida no privado.
+ */
+export function mensagemAvisoAbertura(
+  dataJogo: string,
+  opcoes: { noPrivado?: boolean } = {},
+): string {
+  const quando = rotuloData(dataJogo);
+  if (!opcoes.noPrivado) {
+    return [
+      `⏰ Daqui a pouco abre a lista do racha de ${quando}.`,
+      'A enquete sai no grupo ao meio-dia — fiquem de olho pra marcar presença.',
+    ].join('\n');
+  }
+  return [
+    `⏰ Lembrete: a lista do racha de ${quando} abre ao meio-dia, daqui a pouco.`,
+    'A enquete sai no grupo do racha — é só tocar em "✅ Vou".',
+    '',
+    '(não quer mais esses lembretes? responde "não perturbe")',
+  ].join('\n');
+}
+
+/**
+ * Quarta 11:59 (CRON_AVISO_ABERTURA) — avisa quem organiza que a lista abre
+ * em um minuto: no grupo do comite (GRUPO_ADMIN_JID) e no privado de cada
+ * participante dele.
+ *
+ * Existe porque quem organiza perdia a hora de marcar a propria presenca: a
+ * enquete sobe ao meio-dia no meio da conversa do grupo do racha, e quem nao
+ * estava com o WhatsApp aberto naquele minuto so lembrava horas depois.
+ *
+ * A data vem de `proximoSabado`, nao do banco: as 11:59 a partida da semana
+ * ainda NAO existe - quem a cria e `garantirPartida`, no cron das 12:00.
+ */
+export async function avisarAberturaAosAdmins(
+  log: Log,
+  /**
+   * So o simulador (src/dev/simular-aviso-admins.ts) passa isto: manda o
+   * aviso mesmo com a lista da semana ja aberta, que e a situacao em qualquer
+   * ensaio feito fora de uma quarta 11:59.
+   */
+  opcoes: { mesmoComListaAberta?: boolean } = {},
+): Promise<void> {
+  if (!config.GRUPO_ADMIN_JID) return;
+
+  const dataJogo = proximoSabado(new Date());
+
+  // A lista ja aberta torna o aviso mentira ("daqui a pouco abre"). Acontece
+  // quando a abertura foi recuperada fora do horario (ver
+  // `recuperarAberturaPerdida`), e quem le no grupo ficaria esperando uma
+  // enquete que ja esta no ar.
+  const partida = await partidaAtual();
+  if (
+    partida?.data_jogo === dataJogo &&
+    partida.enquete_id &&
+    !opcoes.mesmoComListaAberta
+  ) {
+    log.info({ partida: dataJogo }, 'lista desta semana ja abriu, aviso nao enviado');
+    return;
+  }
+
+  await sendText(
+    config.GRUPO_ADMIN_JID,
+    mensagemAvisoAbertura(dataJogo),
+  ).catch((err) => log.warn({ err }, 'falha ao avisar o grupo do comite'));
+
+  const participantes = await fetchGroupParticipants(config.GRUPO_ADMIN_JID).catch(
+    (err) => {
+      log.warn({ err }, 'falha ao consultar os membros do grupo do comite');
+      return undefined;
+    },
+  );
+  if (!participantes) return;
+
+  const texto = mensagemAvisoAbertura(dataJogo, { noPrivado: true });
+  const botTelefone = config.BOT_NUMERO
+    ? `${config.BOT_NUMERO}@s.whatsapp.net`
+    : undefined;
+  let enviados = 0;
+
+  for (const p of participantes) {
+    // Telefone, nao lid: e o formato que abre um privado do zero (mesma razao
+    // de `enviarConvitesDeAvaliacao`).
+    if (!p.telefone) continue;
+    if (botTelefone && p.telefone === botTelefone) continue; // o bot esta no grupo
+
+    // Sem cadastro a pessoa nunca falou com o bot - manda mesmo assim: estar
+    // no comite e o criterio aqui, e a mensagem ensina a desligar. `ehMembro`
+    // tambem nao entra: o grupo do racha nao e o criterio deste aviso.
+    const jogador = await buscarPorTelefone(p.telefone);
+    if (jogador?.naoPerturbe) {
+      log.info(
+        { jogadorId: jogador.id },
+        'nao_perturbe: aviso de abertura nao enviado',
+      );
+      continue;
+    }
+
+    enfileirar(log, { tipo: 'texto', para: p.telefone, texto });
+    enviados += 1;
+  }
+
+  log.info(
+    { grupo: config.GRUPO_ADMIN_JID, partida: dataJogo, enviados },
+    'aviso de abertura enviado ao comite',
   );
 }
 
@@ -486,6 +599,11 @@ export function iniciarAgendador(log: Log): void {
     ],
     ['fecha', config.CRON_FECHA, () => fecharLista(log)],
     ['digest', config.CRON_DIGEST, () => digestDoDia(log)],
+    [
+      'aviso_admins',
+      config.CRON_AVISO_ABERTURA,
+      () => avisarAberturaAosAdmins(log),
+    ],
     ['chamada', config.CRON_CHAMADA, () => chamadaDeSexta(log)],
     ['avaliacao', config.CRON_AVALIACAO, () => encerrarPartida(log)],
     ['estatisticas', config.CRON_ESTATISTICAS, () => publicarEstatisticas(log)],

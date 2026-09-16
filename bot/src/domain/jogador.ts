@@ -204,6 +204,25 @@ export async function buscarPorId(jogadorId: number): Promise<Jogador | undefine
   return r ? paraJogador(r) : undefined;
 }
 
+/**
+ * Busca um jogador pelo telefone, SEM criar nem atualizar cadastro.
+ *
+ * Existe separada de `resolver` de proposito: aquela e a porta de entrada de
+ * quem mandou mensagem e, por isso, escreve no banco. Aqui o telefone veio da
+ * lista de participantes de um grupo (o aviso de abertura, em scheduler.ts) e
+ * a unica pergunta e se essa pessoa ja pediu silencio - consultar nao pode
+ * virar cadastro novo.
+ */
+export async function buscarPorTelefone(
+  telefone: string,
+): Promise<Jogador | undefined> {
+  const r = await queryOne<LinhaJogador>(
+    `select ${SELECT_JOGADOR} from jogador where telefone = $1`,
+    [telefone],
+  );
+  return r ? paraJogador(r) : undefined;
+}
+
 /** Liga/desliga a valvula de escape das mensagens que o bot inicia. */
 export async function definirNaoPerturbe(
   jogadorId: number,
