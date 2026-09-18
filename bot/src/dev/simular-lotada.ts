@@ -11,7 +11,8 @@
  *
  * Depois, tocar "✅ Vou" na enquete do grupo com uma conta que ainda nao esta
  * na lista deve ser recusado, sem entrar - e o grupo deve ver o aviso de
- * recusa.
+ * recusa, agora convidando a pessoa a tocar em "🕒 Reserva". Tocar na reserva
+ * deve enfileirar; ver src/dev/simular-reserva.ts para o ciclo completo.
  */
 import { pool } from '../db.js';
 import { partidaAtual } from '../domain/partida.js';

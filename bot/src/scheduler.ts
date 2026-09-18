@@ -1,11 +1,17 @@
 import cron from 'node-cron';
 import { config } from './config.js';
 import { fetchGroupParticipants, sendPoll, sendText } from './evolution/client.js';
-import { listar, listarFixosConfirmados, listarGoleiros } from './domain/inscricao.js';
+import {
+  listar,
+  listarFixosConfirmados,
+  listarGoleiros,
+  promoverPendentes,
+} from './domain/inscricao.js';
 import {
   definirStatus,
   fecharVencidas,
   garantirPartida,
+  listaAberta,
   marcarEncerrada,
   partidaAEncerrar,
   partidaAtual,
@@ -14,7 +20,8 @@ import {
   reservarAbertura,
   reservarEncerramento,
 } from './domain/partida.js';
-import { OPCOES, tituloDaEnquete } from './domain/enquete.js';
+import { OPCOES, explicacaoDaReserva, tituloDaEnquete } from './domain/enquete.js';
+import * as reserva from './domain/reserva.js';
 import {
   OPCOES_AVALIACAO,
   criarConviteAvaliacao,
@@ -25,6 +32,7 @@ import {
   alertasDeVagas,
   contarVagas,
   formatarLista,
+  mensagemSubiuDaReserva,
   rotuloData,
 } from './domain/lista.js';
 import { limparExpiradas, marcarAvisoExpiracao, proximasAExpirar } from './conversa.js';
@@ -69,6 +77,8 @@ export async function anunciarAberturaFixos(
       '',
       `Lista aberta! ${partida.vagas_total} vagas de linha.`,
       `🧤 Goleiro (até ${partida.vagas_goleiro}) é convidado de quem já confirmou, ou contratado por fora — lista à parte.`,
+      '',
+      explicacaoDaReserva(),
       '',
       'Responda na enquete abaixo 👇',
     ].join('\n'),
@@ -303,6 +313,44 @@ export async function avisarAberturaAosAdmins(
 }
 
 /**
+ * Rede de seguranca horaria da reserva: se sobrou vaga de linha com gente
+ * esperando, preenche.
+ *
+ * O caminho normal e a promocao dentro da propria transacao da saida
+ * (`promoverNaTransacao`, em domain/inscricao.ts). Isto aqui cobre o resto: o
+ * container caiu no meio da transacao, ou uma inscricao foi corrigida na mao
+ * no banco - ja aconteceu neste projeto. Sem isso a vaga fica aberta com
+ * gente na fila por ela, e ninguem descobre ate o digest das 19h.
+ *
+ * So com a lista ABERTA: depois de sabado 07:00 nao ha mais vaga a preencher.
+ */
+async function preencherVagasPendentes(log: Log): Promise<void> {
+  const partida = await partidaAtual();
+  if (!partida || !listaAberta(partida)) return;
+
+  const promovidos = await promoverPendentes(partida);
+  if (!promovidos.length) return;
+
+  log.info(
+    { partida: partida.data_jogo, promovidos: promovidos.map((p) => p.nome) },
+    'reserva promovida pela faxina',
+  );
+  const [itens, goleiros, reservas] = await Promise.all([
+    listar(partida.id),
+    listarGoleiros(partida.id),
+    reserva.listar(partida.id),
+  ]);
+  await anunciar(
+    log,
+    [
+      mensagemSubiuDaReserva(promovidos.map((p) => p.nome)),
+      '',
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+    ].join('\n'),
+  );
+}
+
+/**
  * Roda no horario de CRON_FECHA (sabado 07:00 por padrao, 2h antes do jogo)
  * — fecha a lista e publica a final.
  *
@@ -317,14 +365,27 @@ async function fecharLista(log: Log): Promise<void> {
     listar(partida.id),
     listarGoleiros(partida.id),
   ]);
+  // A reserva morre com a lista: nao ha mais vaga pra abrir. Fecha ANTES de
+  // montar a mensagem, e cita quem ficou de fora - senao essa gente continua
+  // esperando um chamado que nao vem mais.
+  const ficaramDeFora = await reserva.fechar(partida.id);
   await definirStatus(partida.id, 'fechada');
-  log.info({ partida: partida.data_jogo }, 'lista fechada');
+  log.info(
+    { partida: partida.data_jogo, ficaramDeFora: ficaramDeFora.length },
+    'lista fechada',
+  );
   await anunciar(
     log,
     [
       '🏁 Lista fechada! Bola em jogo às ' + config.RACHA_HORARIO.split(' ')[0] + '.',
       '',
       formatarLista(partida, itens, goleiros, config.RACHA_NOME),
+      ...(ficaramDeFora.length
+        ? [
+            '',
+            `🕒 Ficaram na reserva e não entraram: ${ficaramDeFora.map((r) => r.nome).join(', ')}. Semana que vem tem mais.`,
+          ]
+        : []),
     ].join('\n'),
   );
 }
@@ -340,9 +401,10 @@ export async function digestDoDia(log: Log): Promise<void> {
   const partida = await partidaAtual();
   if (!partida) return;
 
-  const [itens, goleiros] = await Promise.all([
+  const [itens, goleiros, reservas] = await Promise.all([
     listar(partida.id),
     listarGoleiros(partida.id),
+    reserva.listar(partida.id),
   ]);
   const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
@@ -353,7 +415,7 @@ export async function digestDoDia(log: Log): Promise<void> {
     [
       `📋 Como está a lista para ${rotuloData(partida.data_jogo)}:`,
       '',
-      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
       'Para entrar ou sair, responda na enquete do racha 👆',
@@ -645,6 +707,9 @@ export function iniciarAgendador(log: Log): void {
     encerrarPartida(log).catch((err) =>
       log.warn({ err }, 'falha ao encerrar partida/publicar avaliacao'),
     );
+    preencherVagasPendentes(log).catch((err) =>
+      log.warn({ err }, 'falha ao preencher vagas com a reserva'),
+    );
   });
 
   // E no boot, para nao esperar ate a proxima hora cheia depois de um deploy.
@@ -656,5 +721,6 @@ export function iniciarAgendador(log: Log): void {
       return recuperarAberturaPerdida(log);
     })
     .then(() => encerrarPartida(log))
+    .then(() => preencherVagasPendentes(log))
     .catch((err) => log.warn({ err }, 'falha na faxina de boot'));
 }

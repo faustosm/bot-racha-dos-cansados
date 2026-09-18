@@ -14,10 +14,16 @@ import {
   minhaInscricao,
   normalizarNome,
   removerConvidado,
+  reservarVaga,
   restaurarInscricao,
 } from './domain/inscricao.js';
 import { isoDate, proximaAberturaFixos } from './domain/datas.js';
-import { buscarPorNome, definirNaoPerturbe, resolver } from './domain/jogador.js';
+import {
+  buscarPorId,
+  buscarPorNome,
+  definirNaoPerturbe,
+  resolver,
+} from './domain/jogador.js';
 import type { Jogador } from './domain/jogador.js';
 import {
   avaliacaoAberta,
@@ -32,6 +38,7 @@ import {
 import {
   OPCAO_NAO_VOU,
   OPCAO_VOU_COM_CONVIDADO,
+  OPCAO_RESERVA,
   OPCOES,
   interpretar,
   registrarVoto,
@@ -45,14 +52,20 @@ import {
 } from './domain/avaliacao.js';
 import type { ConviteAvaliacao } from './domain/avaliacao.js';
 import { decifrarVoto, opcoesEscolhidas } from './domain/voto.js';
+import * as reserva from './domain/reserva.js';
 import {
   alertasDeVagas,
   cabeMais,
   contarVagas,
   formatarLista,
+  mensagemAindaTemVaga,
+  mensagemEntrouNaReserva,
+  mensagemListaCheia,
+  mensagemSubiuDaReserva,
   rotuloData,
 } from './domain/lista.js';
 import type { ItemLista, Partida } from './domain/tipos.js';
+import type { Promovido } from './domain/reserva.js';
 import { comoFalarComOBot } from './link.js';
 import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
@@ -126,6 +139,11 @@ const AJUDA = [
   '  ✅ Vou',
   '  👥 Vou com convidado',
   '  ❌ Não vou',
+  '  🕒 Reserva — quando a lista já estiver cheia',
+  '',
+  'RESERVA',
+  '  Lista cheia? Toca em "🕒 Reserva". Se alguém sair, quem está na',
+  '  reserva sobe automático, na ordem de quem pediu primeiro.',
   '',
   'TIRAR UM CONVIDADO',
   '  Me manda aqui: "João não vai mais"',
@@ -270,9 +288,10 @@ async function publicarLista(
   partida: Partida,
   cabecalho: string,
 ): Promise<void> {
-  const [itens, goleiros] = await Promise.all([
+  const [itens, goleiros, reservas] = await Promise.all([
     listar(partida.id),
     listarGoleiros(partida.id),
+    reserva.listar(partida.id),
   ]);
   const vagas = contarVagas(itens, partida.vagas_total);
   const alertas = alertasDeVagas(vagas, config.ALERTA_VAGAS);
@@ -282,7 +301,7 @@ async function publicarLista(
     [
       cabecalho,
       '',
-      formatarLista(partida, itens, goleiros, config.RACHA_NOME),
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
       'Para entrar ou sair, responda na enquete do racha 👆',
@@ -359,11 +378,77 @@ async function registrarSaida(
   partida: Partida,
   cabecalho: string,
   abriuVaga: boolean,
+  /**
+   * Quem subiu da reserva para esta vaga. Entra no MESMO anuncio da saida:
+   * sao o mesmo acontecimento, e duas mensagens seguidas dobrariam o ruido no
+   * grupo a cada desistencia.
+   */
+  promovidos: readonly Promovido[] = [],
 ): Promise<void> {
   const itens = await listar(partida.id);
   await sincronizarStatus(partida, itens);
-  if (!abriuVaga) return;
-  await publicarLista(ctx, partida, cabecalho);
+  // Publica tambem quando alguem subiu sem a vaga ter destravado: a lista
+  // mudou de gente, e o grupo organiza time com ela na mao.
+  if (!abriuVaga && !promovidos.length) return;
+
+  const linhas = [cabecalho];
+  if (promovidos.length) {
+    linhas.push(mensagemSubiuDaReserva(promovidos.map((p) => p.nome)));
+  }
+  await publicarLista(ctx, partida, linhas.join('\n'));
+
+  for (const p of promovidos) await avisarQuemSubiu(ctx, partida, p);
+}
+
+/**
+ * Avisa no privado quem subiu da reserva.
+ *
+ * Vai pela fila espacada (`puxarConversa`) e respeita quem pediu silencio: e
+ * conversa que o BOT inicia. Nao pede pra pessoa trocar o voto na enquete de
+ * proposito - seria mais um toque, e se ela nao trocasse ficaria pior. A
+ * lista publicada e a fonte de verdade; a enquete e so o botao.
+ */
+async function avisarQuemSubiu(
+  ctx: Sessao,
+  partida: Partida,
+  promovido: Promovido,
+): Promise<void> {
+  const alvo = await buscarPorId(promovido.jogadorId);
+  if (!alvo) return;
+  // Mesma regra dos convites de avaliacao: sem telefone o bot nao tem por
+  // onde falar, e o aviso no grupo ja citou o nome.
+  const destino = alvo.telefone ?? alvo.lid;
+  if (!destino) return;
+
+  const linhas = [
+    `🔼 Abriu vaga e você subiu da reserva — está na lista do racha de ${rotuloData(partida.data_jogo)} ✅`,
+    'Pode deixar seu voto na enquete como está, eu já te coloquei na lista.',
+    'Se não puder mais ir, responde "não vou" que eu libero pro próximo.',
+  ];
+
+  // Ele tinha dito que levaria convidado quando caiu na reserva. So promete o
+  // que cabe: perguntar o nome pra `adicionarConvidado` recusar em seguida e
+  // a mesma confusao que `tratarQueroConvidar` ja evita.
+  if (promovido.querConvidado) {
+    const vagas = contarVagas(await listar(partida.id), partida.vagas_total);
+    linhas.push(
+      '',
+      convidadosLiberados(partida) && cabeMais(vagas)
+        ? 'Você tinha marcado que ia levar convidado: me manda o nome aqui que eu cadastro.'
+        : 'Sua vaga é só sua por enquanto: não sobrou vaga pro convidado.',
+    );
+  }
+
+  puxarConversa(
+    {
+      ...ctx,
+      jogadorId: alvo.id,
+      jidPrivado: destino,
+      nomeNaLista: alvo.nome,
+      naoPerturbe: alvo.naoPerturbe,
+    },
+    linhas.join('\n'),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -852,6 +937,48 @@ async function tratarConfirmar(ctx: Sessao, partida: Partida): Promise<void> {
 }
 
 /**
+ * Toque em "🕒 Reserva" na enquete.
+ *
+ * Tres desfechos, e nenhum deles mexe na lista: entrar na reserva nao ocupa
+ * vaga, entao nada aqui republica a lista no grupo - so uma linha dizendo o
+ * que aconteceu, no mesmo canal em que a recusa ja aparecia.
+ */
+async function tratarReservar(
+  ctx: Sessao,
+  partida: Partida,
+  opcoes: { querConvidado?: boolean } = {},
+): Promise<void> {
+  const r = await reservarVaga(
+    partida,
+    ctx.jogadorId,
+    opcoes.querConvidado ?? false,
+  );
+
+  if (r.tipo === 'ja_esta_na_lista') {
+    puxarConversa(
+      ctx,
+      'Você já está na lista ✅ — reserva é só pra quem ficou de fora. Não precisa fazer nada.',
+    );
+    return;
+  }
+
+  if (r.tipo === 'cabe_vaga') {
+    const vagas = contarVagas(
+      await listar(partida.id),
+      partida.vagas_total,
+    );
+    await avisarGrupo(ctx, mensagemAindaTemVaga(ctx.nomeNaLista, vagas));
+    return;
+  }
+
+  // Ja estava na reserva: reentrega do webhook, ou so acrescentou o convidado.
+  // A ordem nao mudou, entao o grupo nao tem o que saber.
+  if (r.jaEstava) return;
+
+  await avisarGrupo(ctx, mensagemEntrouNaReserva(ctx.nomeNaLista, r.posicao));
+}
+
+/**
  * @param opcoes.origemVoto true quando veio de um voto na enquete do grupo.
  *
  * A distincao importa: acionado por VOTO (ex.: pergunta sobre convidados
@@ -873,7 +1000,17 @@ async function tratarDesistir(
   };
 
   const r = await desistir(partida, ctx.jogadorId);
-  if (!r.ok) return; // nao estava na lista - tudo bem, sem aviso
+  if (!r.ok) {
+    // Nao estava na LISTA - mas pode estar na reserva, e ai "nao vou" quer
+    // dizer "me tira da fila". Nada disso vai pro grupo: sair da reserva nao
+    // destrava vaga nenhuma, ninguem esta esperando esse aviso.
+    if (await reserva.sair(partida.id, ctx.jogadorId)) {
+      falarNoPrivado(
+        `Beleza, tirei você da reserva do racha de ${rotuloData(partida.data_jogo)}.`,
+      );
+    }
+    return; // nao estava em lugar nenhum - tudo bem, sem aviso
+  }
 
   await conversa.limpar(ctx.jogadorId);
 
@@ -882,7 +1019,13 @@ async function tratarDesistir(
   const extra = n > 0 ? ` (levou ${n} convidado${n > 1 ? 's' : ''} junto)` : '';
 
   const cabecalho = `❌ ${ctx.nomeNaLista} não vai mais${extra}. Liberou vaga!`;
-  await registrarSaida(ctx, partida, cabecalho, r.valor.abriuVaga);
+  await registrarSaida(
+    ctx,
+    partida,
+    cabecalho,
+    r.valor.abriuVaga,
+    r.valor.promovidos,
+  );
 
   if (n === 0) return;
 
@@ -961,7 +1104,7 @@ async function tratarQueroConvidar(
   if (!cabeMais(contarVagas(itensAtuais, partida.vagas_total))) {
     await noPrivado(
       ctx,
-      '❌ A lista de linha já está completa, não sobrou vaga pro seu convidado. Se alguém sair eu aviso o grupo.',
+      '❌ A lista de linha já está completa, não sobrou vaga pro seu convidado. Quando abrir vaga ela vai pra quem está na reserva.',
       { rodape: true },
     );
     return;
@@ -1057,6 +1200,7 @@ async function tratarTirarConvidado(
     partida,
     `❌ ${r.nome} (convidado de ${ctx.nomeNaLista}) não vai mais. Liberou vaga!`,
     r.abriuVaga,
+    r.promovidos,
   );
 }
 
@@ -1178,7 +1322,16 @@ async function tratarAdmin(
 
   const r = await confirmarFixo(partida, alvo.id, 'linha');
   if (!r.ok) {
-    await noPrivado(ctx, `${alvo.nome}: ${r.motivo}`, { rodape: true });
+    // Admin NAO fura a reserva: quem esta na fila pediu antes. Poe no fim
+    // dela, como qualquer um - senao a reserva perde a razao de existir.
+    const posto = await reservarVaga(partida, alvo.id, false);
+    await noPrivado(
+      ctx,
+      posto.tipo === 'reservado'
+        ? `${alvo.nome}: ${r.motivo}\nColoquei ele na reserva (${posto.posicao}º) — sobe sozinho se abrir vaga.`
+        : `${alvo.nome}: ${r.motivo}`,
+      { rodape: true },
+    );
     return;
   }
 
@@ -1389,6 +1542,17 @@ async function tratarVotoConfirmacao(
     return;
   }
 
+  if (acao.tipo === 'reservar') {
+    await tratarReservar(ctx, partida, {
+      querConvidado: anterior === OPCAO_VOU_COM_CONVIDADO,
+    });
+    // Ao contrario da recusa por lista cheia (abaixo), aqui o voto E
+    // registrado: a intencao ficou guardada na reserva, entao nao existe
+    // "proxima tentativa" a proteger do dedupe.
+    await registrarVoto(partida.id, ctx.jogadorId, opcao);
+    return;
+  }
+
   const r = await confirmarFixo(partida, ctx.jogadorId, 'linha');
   if (!r.ok) {
     // Recusa (lista cheia) precisa aparecer: o voto ficou marcado na enquete e
@@ -1396,8 +1560,17 @@ async function tratarVotoConfirmacao(
     //
     // O voto NAO e registrado aqui de proposito: registrar uma tentativa que
     // falhou faria a proxima tentativa identica ser silenciada pelo dedupe, e
-    // a pessoa nunca entraria quando abrisse vaga.
-    await avisarGrupo(ctx, `⚠️ ${ctx.nomeNaLista}: ${r.motivo}`);
+    // a pessoa nunca entraria quando abrisse vaga. Continua valendo mesmo com
+    // a reserva: quem toca em "Vou" com a lista cheia NAO entra na reserva
+    // sozinho - ele e convidado a tocar na opcao, e pode nem tocar.
+    const itens = await listar(partida.id);
+    const vagas = contarVagas(itens, partida.vagas_total);
+    await avisarGrupo(
+      ctx,
+      vagas.livres === 0
+        ? mensagemListaCheia(ctx.nomeNaLista, vagas, OPCAO_RESERVA)
+        : `⚠️ ${ctx.nomeNaLista}: ${r.motivo}`,
+    );
     return;
   }
 
@@ -1439,7 +1612,7 @@ async function tratarVotoConfirmacao(
   if (!cabeMais(contarVagas(itensAtuais, partida.vagas_total))) {
     puxarConversa(
       ctx,
-      '❌ A lista de linha já está completa, não sobrou vaga pro seu convidado. Se alguém sair eu aviso o grupo.',
+      '❌ A lista de linha já está completa, não sobrou vaga pro seu convidado. Quando abrir vaga ela vai pra quem está na reserva.',
     );
     return;
   }
@@ -1532,6 +1705,7 @@ function ajudaDoGrupo(): string {
     'Digite "lista" para ver a atual.',
     '',
     'Para entrar ou sair, é só tocar na enquete do racha aqui no grupo.',
+    'Se a lista já estiver cheia, toca em "🕒 Reserva" — você sobe sozinho quando abrir vaga.',
     comoFalarComOBot(),
   ].join('\n');
 }
@@ -1558,11 +1732,14 @@ async function tratarNoGrupo(entrada: Contexto): Promise<void> {
   const partida = await partidaParaLeitura();
   if (!partida) return; // Nenhum racha jamais criado: silencio.
 
-  const [itens, goleiros] = await Promise.all([
+  const [itens, goleiros, reservas] = await Promise.all([
     listar(partida.id),
     listarGoleiros(partida.id),
+    reserva.listar(partida.id),
   ]);
-  await mandar(formatarLista(partida, itens, goleiros, config.RACHA_NOME));
+  await mandar(
+    formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+  );
 }
 
 /**
@@ -1768,13 +1945,16 @@ async function processarPrivado(
   }
 
   if (intencao.tipo === 'lista') {
-    const [itens, goleiros] = await Promise.all([
+    const [itens, goleiros, reservas] = await Promise.all([
       listar(partida.id),
       listarGoleiros(partida.id),
+      reserva.listar(partida.id),
     ]);
-    await noPrivado(ctx, formatarLista(partida, itens, goleiros, config.RACHA_NOME), {
-      rodape: true,
-    });
+    await noPrivado(
+      ctx,
+      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+      { rodape: true },
+    );
     return { ctx, partida };
   }
 

@@ -13,17 +13,25 @@ import type { Posicao } from './tipos.js';
 export const OPCAO_VOU = '✅ Vou';
 export const OPCAO_VOU_COM_CONVIDADO = '👥 Vou com convidado';
 export const OPCAO_NAO_VOU = '❌ Não vou';
+/**
+ * Reserva (18/09/2026). Entrou NO FIM da lista de proposito: o hash e por
+ * texto, um por opcao, entao acrescentar no fim nao mexe nos das tres
+ * anteriores - enquete ja publicada continua sendo lida certo, com as tres.
+ */
+export const OPCAO_RESERVA = '🕒 Reserva';
 
 export const OPCOES: readonly string[] = [
   OPCAO_VOU,
   OPCAO_VOU_COM_CONVIDADO,
   OPCAO_NAO_VOU,
+  OPCAO_RESERVA,
 ];
 
 export type AcaoDoVoto =
   | { readonly tipo: 'confirmar'; readonly posicao: Posicao }
   | { readonly tipo: 'confirmar_com_convidado' }
-  | { readonly tipo: 'desistir' };
+  | { readonly tipo: 'desistir' }
+  | { readonly tipo: 'reservar' };
 
 /**
  * Traduz a opcao votada em acao de dominio.
@@ -41,6 +49,8 @@ export function interpretar(opcao: string): AcaoDoVoto | undefined {
       return { tipo: 'confirmar_com_convidado' };
     case OPCAO_NAO_VOU:
       return { tipo: 'desistir' };
+    case OPCAO_RESERVA:
+      return { tipo: 'reservar' };
     default:
       return undefined;
   }
@@ -58,6 +68,20 @@ export function interpretar(opcao: string): AcaoDoVoto | undefined {
  */
 export function tituloDaEnquete(vagas: number): string {
   return `⚽ Vote aí! ${vagas} vagas de linha`;
+}
+
+/**
+ * Como a reserva e explicada quando a enquete sobe, na quarta.
+ *
+ * Separado do titulo porque o titulo e curto de proposito (ver acima) e isto
+ * e uma regra nova que ninguem conhece ainda. Sai no anuncio de abertura,
+ * logo acima da enquete.
+ */
+export function explicacaoDaReserva(): string {
+  return [
+    `🕒 Novidade: quando a lista encher, toca em "${OPCAO_RESERVA}".`,
+    'Se alguém sair, quem está na reserva sobe automático, na ordem de quem pediu primeiro.',
+  ].join('\n');
 }
 
 // --------------------------------------------------------------------------

@@ -1,4 +1,10 @@
-import type { ItemGoleiro, ItemLista, Partida, Posicao } from './tipos.js';
+import type {
+  ItemGoleiro,
+  ItemLista,
+  ItemReserva,
+  Partida,
+  Posicao,
+} from './tipos.js';
 
 // Tudo aqui e funcao pura: recebe os itens ja carregados e devolve texto.
 // Sem banco e sem HTTP, o que torna o formato testavel com node --test.
@@ -130,6 +136,7 @@ export function formatarLista(
   itens: readonly ItemLista[],
   goleiros: readonly ItemGoleiro[] = [],
   nomeDoRacha = 'Racha',
+  reservas: readonly ItemReserva[] = [],
 ): string {
   const vagas = contarVagas(itens, partida.vagas_total);
 
@@ -161,6 +168,22 @@ export function formatarLista(
       ? `🧤 Goleiros: ${goleiros.map((g) => linhaGoleiro(g, presentes)).join(', ')}.`
       : '🧤 Goleiro: nenhum confirmado ainda.',
   );
+
+  // Reserva e a TERCEIRA lista, depois de linha e goleiro - numeracao propria
+  // e fora do X/18, pelo mesmo motivo que o goleiro ficou de fora: quem le
+  // precisa enxergar na hora que essa gente NAO esta na lista ainda.
+  // Bloco ausente quando vazio: numa semana tranquila ele apareceria em todo
+  // digest sem dizer nada.
+  if (reservas.length) {
+    partes.push(
+      '',
+      '🕒 Reservas (sobem automático se abrir vaga):',
+      ...reservas.map(
+        (r, n) =>
+          `${String(n + 1).padStart(2, ' ')}. ${r.nome}${r.querConvidado ? ' (+1 convidado)' : ''}`,
+      ),
+    );
+  }
   return partes.join('\n');
 }
 
@@ -184,4 +207,54 @@ export function alertasDeVagas(vagas: Vagas, limiar: number): string[] {
     ];
   }
   return [];
+}
+
+/**
+ * O que o bot responde a quem tocou em "Vou" com a lista cheia.
+ *
+ * Nao poe a pessoa na reserva sozinho: ela escolhe, tocando na opcao. O texto
+ * existe para fazer a ponte - sem ele, o toque em "Vou" continuaria sendo um
+ * beco sem saida, que e o problema que a reserva veio resolver.
+ */
+export function mensagemListaCheia(
+  nome: string,
+  vagas: Vagas,
+  /**
+   * O texto EXATO da opcao na enquete (`OPCAO_RESERVA`), passado de fora para
+   * este modulo continuar puro - `enquete.ts` fala com o banco, e os testes
+   * daqui rodam sem .env e sem Postgres.
+   */
+  opcaoReserva: string,
+): string {
+  return [
+    `⚠️ ${nome}: a lista está completa (${vagas.ocupadas}/${vagas.total}). Quer ficar na reserva?`,
+    `Toca em "${opcaoReserva}" na enquete que eu te chamo se abrir vaga.`,
+  ].join('\n');
+}
+
+/**
+ * Tocou em "Reserva" mas ainda ha vaga. Nao entra na reserva: ficar de fora
+ * com vaga sobrando e o pior desfecho possivel, e e o que aconteceria se o
+ * bot obedecesse ao toque. Manda de volta pro caminho normal.
+ */
+export function mensagemAindaTemVaga(nome: string, vagas: Vagas): string {
+  return `⚠️ ${nome}: ainda tem vaga (${vagas.ocupadas}/${vagas.total})! Clica em "✅ Vou" que você entra direto.`;
+}
+
+/** Entrou na reserva. Uma linha no grupo, sem republicar a lista. */
+export function mensagemEntrouNaReserva(nome: string, posicao: number): string {
+  return `🕒 ${nome} entrou na reserva (${posicao}º). Se alguém sair, sobe automático.`;
+}
+
+/**
+ * A linha que acompanha a saida quando alguem sobe.
+ *
+ * Vai junto do aviso de saida, nunca numa segunda mensagem: sao o mesmo
+ * acontecimento, e duas mensagens seguidas dobram o ruido no grupo a cada
+ * desistencia.
+ */
+export function mensagemSubiuDaReserva(nomes: readonly string[]): string {
+  return nomes.length === 1
+    ? `🔼 Subiu da reserva: ${nomes[0]}.`
+    : `🔼 Subiram da reserva: ${nomes.join(', ')}.`;
 }

@@ -57,6 +57,18 @@ export interface ItemGoleiro {
 }
 
 /**
+ * Alguem na reserva (lista de espera) da linha, esperando vaga abrir.
+ * Lista PROPRIA, como a de goleiro - nunca conta no X/18.
+ */
+export interface ItemReserva {
+  readonly id: number;
+  readonly jogadorId: number;
+  readonly nome: string;
+  /** Votou "Vou com convidado" antes de cair na reserva. */
+  readonly querConvidado: boolean;
+}
+
+/**
  * Resultado de uma operacao de dominio. Recusa por regra de negocio ("lista
  * cheia") nao e excecao: e uma resposta esperada que vira mensagem no grupo.
  * Excecao fica para o que realmente quebrou (banco fora do ar).

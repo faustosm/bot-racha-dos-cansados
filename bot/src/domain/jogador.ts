@@ -103,6 +103,25 @@ async function fundir(
     'update inscricao set convidado_de_id = $2 where convidado_de_id = $1',
     [perdedor.id, vencedor.id],
   );
+  // Mesmo cuidado da inscricao, agora na reserva: `reserva` tem cascade para
+  // `jogador`, entao sem mover as linhas o DELETE abaixo apagaria o lugar do
+  // perdedor na fila EM SILENCIO - a pessoa sumiria da reserva sem ninguem
+  // perceber. E se os dois cadastros estiverem na mesma reserva, mover direto
+  // violaria `reserva_jogador_unica`: o do perdedor sai antes.
+  await client.query(
+    `update reserva r set saiu_em = now(), motivo_saida = 'desistiu'
+      where r.jogador_id = $1 and r.saiu_em is null
+        and exists (
+          select 1 from reserva b
+           where b.partida_id = r.partida_id and b.jogador_id = $2
+             and b.saiu_em is null)`,
+    [perdedor.id, vencedor.id],
+  );
+  await client.query('update reserva set jogador_id = $2 where jogador_id = $1', [
+    perdedor.id,
+    vencedor.id,
+  ]);
+
   // Conversa e efemera: descartar e mais simples que resolver o conflito de PK.
   await client.query('delete from conversa where jogador_id = $1', [
     perdedor.id,
