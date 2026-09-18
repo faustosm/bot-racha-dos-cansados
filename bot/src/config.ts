@@ -46,6 +46,11 @@ const schema = z.object({
   // teto proprio (VAGAS_GOLEIRO) e nunca ocupa vaga dos 18.
   VAGAS_TOTAL: z.coerce.number().int().positive().default(18),
   VAGAS_GOLEIRO: z.coerce.number().int().nonnegative().default(2),
+  // Teto da reserva (18/09/2026): um time a mais esperando, nao uma fila sem
+  // fim. Nao e so estetica - a lista publicada sai a cada saida e todo dia as
+  // 19h, e uma fila longa faria o proprio nome da pessoa se perder no meio do
+  // texto, que e pior do que nao entrar: ela acha que reservou e nao reservou.
+  RESERVA_TOTAL: z.coerce.number().int().nonnegative().default(6),
 
   // Cron do agendador (horario local do container, TZ=America/Sao_Paulo).
   CRON_ABRE_FIXOS: z.string().default('0 12 * * 3'), // quarta 12:00

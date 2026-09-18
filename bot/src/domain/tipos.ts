@@ -11,6 +11,8 @@ export interface Partida {
   readonly fecha_em: Date;
   readonly vagas_total: number;
   readonly vagas_goleiro: number;
+  /** Quantos cabem na reserva. Teto proprio, separado das vagas de linha. */
+  readonly reserva_total: number;
   readonly status: StatusPartida;
   /** Id da mensagem da enquete publicada no grupo. */
   readonly enquete_id: string | null;

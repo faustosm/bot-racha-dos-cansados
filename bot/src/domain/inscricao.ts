@@ -355,7 +355,8 @@ export async function confirmarFixo(
 export type Reserva =
   | { readonly tipo: 'reservado'; readonly posicao: number; readonly jaEstava: boolean }
   | { readonly tipo: 'cabe_vaga'; readonly ocupadas: number }
-  | { readonly tipo: 'ja_esta_na_lista' };
+  | { readonly tipo: 'ja_esta_na_lista' }
+  | { readonly tipo: 'reserva_cheia'; readonly total: number };
 
 /** Poe na reserva, se e so se a lista de linha estiver cheia agora. */
 export async function reservarVaga(
@@ -378,6 +379,22 @@ export async function reservarVaga(
 
     if (contagem.linha < partida.vagas_total) {
       return { tipo: 'cabe_vaga' as const, ocupadas: contagem.linha };
+    }
+
+    // Teto da reserva, contado sob o MESMO lock da partida: dois toques
+    // simultaneos no ultimo lugar da fila leriam 5/6 os dois e entrariam
+    // ambos, do mesmo jeito que dois "Vou" fechariam a lista com 19.
+    const naFila = await reserva.contarNaTransacao(client, partida.id);
+    const jaNaFila = await reserva.posicaoNaTransacao(
+      client,
+      partida.id,
+      jogadorId,
+    );
+    // Quem ja esta na fila nao disputa lugar consigo mesmo: sem isto, o
+    // 6o da fila que troca "Vou" por "Vou com convidado" levaria "a reserva
+    // esta cheia" e perderia a intencao do convidado.
+    if (jaNaFila === undefined && naFila >= partida.reserva_total) {
+      return { tipo: 'reserva_cheia' as const, total: partida.reserva_total };
     }
 
     const entrada = await reserva.entrarNaTransacao(

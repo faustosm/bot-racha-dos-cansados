@@ -21,7 +21,11 @@ import {
   reservarVaga,
 } from '../domain/inscricao.js';
 import * as reserva from '../domain/reserva.js';
-import { formatarLista, mensagemEntrouNaReserva } from '../domain/lista.js';
+import {
+  formatarLista,
+  mensagemEntrouNaReserva,
+  mensagemReservaCheia,
+} from '../domain/lista.js';
 import { resolver } from '../domain/jogador.js';
 import { config } from '../config.js';
 
@@ -35,7 +39,12 @@ async function main(): Promise<void> {
   // 1. enche a lista
   let entraram = 0;
   const dentro: number[] = [];
-  for (let i = 1; entraram < partida.vagas_total; i++) {
+  // Limite de tentativas, nao "ate encher": rodar isto num banco que JA esta
+  // cheio faz toda confirmacao ser recusada, e um `while (entraram < 18)`
+  // gira para sempre criando jogadores ficticios. Aconteceu em 18/09/2026,
+  // na segunda vez que rodei contra o mesmo banco.
+  for (let i = 1; i <= partida.vagas_total * 2; i++) {
+    if (entraram >= partida.vagas_total) break;
     const j = await resolver({
       telefone: `55999900${String(i).padStart(4, '0')}@s.whatsapp.net`,
       nome: `Fictício ${i}`,
@@ -46,13 +55,21 @@ async function main(): Promise<void> {
       dentro.push(j.id);
     }
   }
+  if (entraram === 0) {
+    console.log('a lista ja estava cheia - rode num banco limpo pra ver o ciclo inteiro');
+  }
   console.log(`lista cheia: ${entraram}/${partida.vagas_total}`);
 
   // 2. tres pessoas tentam entrar e vao pra reserva
+  // Sete candidatos para SEIS lugares: o ultimo tem que bater no teto.
   const candidatos = [
     ['Reserva Um', false],
     ['Reserva Dois', true],
     ['Reserva Três', false],
+    ['Reserva Quatro', false],
+    ['Reserva Cinco', false],
+    ['Reserva Seis', false],
+    ['Reserva Sete', false],
   ] as const;
   for (const [i, [n, querConvidado]] of candidatos.entries()) {
     // Telefone derivado do INDICE, nunca do nome: derivar do nome ja fez dois
@@ -66,7 +83,9 @@ async function main(): Promise<void> {
     console.log(
       r.tipo === 'reservado'
         ? `  ${mensagemEntrouNaReserva(n, r.posicao)}`
-        : `  ${n}: ${r.tipo}`,
+        : r.tipo === 'reserva_cheia'
+          ? `  ${mensagemReservaCheia(n, r.total)}`
+          : `  ${n}: ${r.tipo}`,
     );
   }
 
@@ -88,7 +107,9 @@ async function main(): Promise<void> {
     listarGoleiros(partida.id),
     reserva.listar(partida.id),
   ]);
-  console.log(`\n${formatarLista(partida, itens, goleiros, config.RACHA_NOME, fila)}`);
+  console.log(
+    `\n${formatarLista(partida, itens, goleiros, config.RACHA_NOME, fila, partida.reserva_total)}`,
+  );
 }
 
 main()

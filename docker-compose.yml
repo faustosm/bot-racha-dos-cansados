@@ -142,6 +142,7 @@ services:
       # Regras do racha. Os defaults aqui valem se o .env nao definir - assim
       # um .env antigo nao quebra o boot.
       VAGAS_TOTAL: ${VAGAS_TOTAL:-18}
+      RESERVA_TOTAL: ${RESERVA_TOTAL:-6}
       CRON_ABRE_FIXOS: ${CRON_ABRE_FIXOS:-0 12 * * 3}
       CRON_ABRE_CONVIDADOS: ${CRON_ABRE_CONVIDADOS:-0 12 * * 4}
       CRON_FECHA: ${CRON_FECHA:-0 7 * * 6}

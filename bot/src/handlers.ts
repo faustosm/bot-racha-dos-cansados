@@ -61,6 +61,7 @@ import {
   mensagemAindaTemVaga,
   mensagemEntrouNaReserva,
   mensagemListaCheia,
+  mensagemReservaCheia,
   mensagemSubiuDaReserva,
   rotuloData,
 } from './domain/lista.js';
@@ -301,7 +302,14 @@ async function publicarLista(
     [
       cabecalho,
       '',
-      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+      formatarLista(
+        partida,
+        itens,
+        goleiros,
+        config.RACHA_NOME,
+        reservas,
+        partida.reserva_total,
+      ),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
       'Para entrar ou sair, responda na enquete do racha 👆',
@@ -959,6 +967,11 @@ async function tratarReservar(
       ctx,
       'Você já está na lista ✅ — reserva é só pra quem ficou de fora. Não precisa fazer nada.',
     );
+    return;
+  }
+
+  if (r.tipo === 'reserva_cheia') {
+    await avisarGrupo(ctx, mensagemReservaCheia(ctx.nomeNaLista, r.total));
     return;
   }
 
@@ -1738,7 +1751,14 @@ async function tratarNoGrupo(entrada: Contexto): Promise<void> {
     reserva.listar(partida.id),
   ]);
   await mandar(
-    formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+    formatarLista(
+      partida,
+      itens,
+      goleiros,
+      config.RACHA_NOME,
+      reservas,
+      partida.reserva_total,
+    ),
   );
 }
 
@@ -1952,7 +1972,14 @@ async function processarPrivado(
     ]);
     await noPrivado(
       ctx,
-      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+      formatarLista(
+        partida,
+        itens,
+        goleiros,
+        config.RACHA_NOME,
+        reservas,
+        partida.reserva_total,
+      ),
       { rodape: true },
     );
     return { ctx, partida };

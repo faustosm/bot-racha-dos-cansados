@@ -345,7 +345,14 @@ async function preencherVagasPendentes(log: Log): Promise<void> {
     [
       mensagemSubiuDaReserva(promovidos.map((p) => p.nome)),
       '',
-      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+      formatarLista(
+        partida,
+        itens,
+        goleiros,
+        config.RACHA_NOME,
+        reservas,
+        partida.reserva_total,
+      ),
     ].join('\n'),
   );
 }
@@ -415,7 +422,14 @@ export async function digestDoDia(log: Log): Promise<void> {
     [
       `📋 Como está a lista para ${rotuloData(partida.data_jogo)}:`,
       '',
-      formatarLista(partida, itens, goleiros, config.RACHA_NOME, reservas),
+      formatarLista(
+        partida,
+        itens,
+        goleiros,
+        config.RACHA_NOME,
+        reservas,
+        partida.reserva_total,
+      ),
       ...(alertas.length ? ['', ...alertas] : []),
       '',
       'Para entrar ou sair, responda na enquete do racha 👆',

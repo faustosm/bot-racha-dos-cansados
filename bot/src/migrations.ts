@@ -459,6 +459,11 @@ export const migrations: readonly Migration[] = [
       create index reserva_partida_ativa
         on reserva (partida_id, criado_em, id)
         where saiu_em is null;
+
+      -- Teto da reserva, fixado na partida como vagas_total e vagas_goleiro:
+      -- mudar o .env no meio da semana nao pode mexer numa fila que ja esta
+      -- correndo, com gente contando com a posicao que tem.
+      alter table partida add column reserva_total int not null default 6;
     `,
   },
 ];

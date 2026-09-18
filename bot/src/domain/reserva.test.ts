@@ -5,6 +5,7 @@ import {
   mensagemAindaTemVaga,
   mensagemEntrouNaReserva,
   mensagemListaCheia,
+  mensagemReservaCheia,
   mensagemSubiuDaReserva,
 } from './lista.js';
 import { OPCAO_RESERVA, OPCOES, interpretar } from './enquete.js';
@@ -134,5 +135,38 @@ describe('as mensagens da reserva', () => {
       mensagemSubiuDaReserva(['Thiago', 'Welker']),
       /Subiram da reserva: Thiago, Welker\./,
     );
+  });
+});
+
+describe('o teto da reserva', () => {
+  it('mostra quantos cabem, para ninguem achar que a fila e infinita', () => {
+    const texto = formatarLista(
+      partida,
+      lotada,
+      [],
+      'Racha',
+      [naReserva(90, 'Thiago'), naReserva(91, 'Welker')],
+      6,
+    );
+    assert.match(texto, /🕒 Reservas 2\/6/);
+  });
+
+  it('sem teto informado, nao inventa numero nenhum', () => {
+    // Chamadas antigas (simuladores, testes) nao passam o teto - e melhor
+    // omitir do que imprimir "2/0".
+    const texto = formatarLista(partida, lotada, [], 'Racha', [
+      naReserva(90, 'Thiago'),
+    ]);
+    assert.match(texto, /🕒 Reservas \(/);
+    // Especifico de proposito: /\/0/ sozinho casaria com a data ("26/09").
+    assert.doesNotMatch(texto, /Reservas \d+\/\d+/);
+  });
+
+  it('com a reserva cheia, diz o que ainda da pra fazer', () => {
+    // So barrar deixaria a pessoa sem motivo nenhum pra tentar de novo - e o
+    // lugar volta a existir assim que alguem sobe ou desiste.
+    const texto = mensagemReservaCheia('Thiago', 6);
+    assert.match(texto, /6\/6/);
+    assert.match(texto, /pode tentar de novo/);
   });
 });

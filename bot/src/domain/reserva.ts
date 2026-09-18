@@ -71,6 +71,37 @@ export async function posicao(
   return r ? Number(r.posicao) : undefined;
 }
 
+/** Quantos estao na fila agora. Dentro da transacao, para decidir se cabe. */
+export async function contarNaTransacao(
+  client: PoolClient,
+  partidaId: number,
+): Promise<number> {
+  const { rows } = await client.query<{ n: string }>(
+    `select count(*)::text as n from reserva
+      where partida_id = $1 and saiu_em is null`,
+    [partidaId],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** A posicao dela na fila, dentro da transacao. undefined = nao esta nela. */
+export async function posicaoNaTransacao(
+  client: PoolClient,
+  partidaId: number,
+  jogadorId: number,
+): Promise<number | undefined> {
+  const { rows } = await client.query<{ posicao: string }>(
+    `select posicao from (
+       select jogador_id,
+              row_number() over (order by criado_em, id) as posicao
+         from reserva
+        where partida_id = $1 and saiu_em is null
+     ) f where jogador_id = $2`,
+    [partidaId, jogadorId],
+  );
+  return rows[0] ? Number(rows[0].posicao) : undefined;
+}
+
 export interface Entrada {
   readonly posicao: number;
   /** Ja estava na reserva: nao mexeu na ordem, e o grupo nao precisa saber. */

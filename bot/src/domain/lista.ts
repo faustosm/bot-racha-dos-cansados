@@ -137,6 +137,8 @@ export function formatarLista(
   goleiros: readonly ItemGoleiro[] = [],
   nomeDoRacha = 'Racha',
   reservas: readonly ItemReserva[] = [],
+  /** Teto da reserva, para a lista mostrar 3/6 em vez de so 3. */
+  reservaTotal = 0,
 ): string {
   const vagas = contarVagas(itens, partida.vagas_total);
 
@@ -177,7 +179,7 @@ export function formatarLista(
   if (reservas.length) {
     partes.push(
       '',
-      '🕒 Reservas (sobem automático se abrir vaga):',
+      `🕒 Reservas${reservaTotal ? ` ${reservas.length}/${reservaTotal}` : ''} (sobem automático se abrir vaga):`,
       ...reservas.map(
         (r, n) =>
           `${String(n + 1).padStart(2, ' ')}. ${r.nome}${r.querConvidado ? ' (+1 convidado)' : ''}`,
@@ -244,6 +246,20 @@ export function mensagemAindaTemVaga(nome: string, vagas: Vagas): string {
 /** Entrou na reserva. Uma linha no grupo, sem republicar a lista. */
 export function mensagemEntrouNaReserva(nome: string, posicao: number): string {
   return `🕒 ${nome} entrou na reserva (${posicao}º). Se alguém sair, sobe automático.`;
+}
+
+/**
+ * A reserva tambem encheu.
+ *
+ * Diz o que ainda da pra fazer, em vez de so barrar: o lugar volta a existir
+ * assim que alguem da fila subir ou desistir, e sem essa frase a pessoa nao
+ * tem motivo nenhum pra tentar de novo.
+ */
+export function mensagemReservaCheia(nome: string, total: number): string {
+  return [
+    `⚠️ ${nome}: a lista e a reserva estão cheias (reserva: ${total}/${total}).`,
+    'Se alguém da reserva subir ou desistir, abre lugar — pode tentar de novo.',
+  ].join('\n');
 }
 
 /**

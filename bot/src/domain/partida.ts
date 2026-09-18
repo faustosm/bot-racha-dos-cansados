@@ -10,7 +10,7 @@ export { isoDate, janelaAvaliacao, janelas, proximoSabado } from './datas.js';
 // guardada em `avaliacao` - essas 3 colunas de `partida` ficaram sem leitor
 // (vestigio historico, mesmo caso de `lista_lotou_em`).
 const COLUNAS = `id, data_jogo, abre_fixos, abre_convidados, fecha_em,
-                 vagas_total, vagas_goleiro, status,
+                 vagas_total, vagas_goleiro, reserva_total, status,
                  enquete_id, enquete_segredo, enquete_criador,
                  encerrada_em, encerra_em, abrindo_em, encerrando_em`;
 
@@ -25,8 +25,8 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
   const criada = await queryOne<Partida>(
     `insert into partida
        (data_jogo, abre_fixos, abre_convidados, fecha_em, encerra_em,
-        vagas_total, vagas_goleiro)
-     values ($1, $2, $3, $4, $5, $6, $7)
+        vagas_total, vagas_goleiro, reserva_total)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
      on conflict (data_jogo) do nothing
      returning ${COLUNAS}`,
     [
@@ -37,6 +37,7 @@ export async function garantirPartida(agora = new Date()): Promise<Partida> {
       encerraEm,
       config.VAGAS_TOTAL,
       config.VAGAS_GOLEIRO,
+      config.RESERVA_TOTAL,
     ],
   );
   if (criada) return criada;
