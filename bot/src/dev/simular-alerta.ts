@@ -88,7 +88,7 @@ async function main(): Promise<void> {
         '',
         cenario.cabecalho,
         '',
-        formatarLista(partida, cenario.itens, config.RACHA_NOME),
+        formatarLista(partida, cenario.itens, [], config.RACHA_NOME),
         ...(alertas.length ? ['', ...alertas] : []),
       ].join('\n');
 

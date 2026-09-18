@@ -1,6 +1,8 @@
 import type { PoolClient } from 'pg';
 import { query, queryOne, transaction } from '../db.js';
 import { motivoDaRecusa, motivoRecusaGoleiro } from './lista.js';
+import * as reserva from './reserva.js';
+import type { Promovido } from './reserva.js';
 import { erro, ok } from './tipos.js';
 import type {
   ItemGoleiro,
@@ -206,6 +208,43 @@ function motivoDeCapacidade(
 }
 
 
+/**
+ * Preenche com a reserva as vagas de linha que estao sobrando AGORA.
+ *
+ * Roda dentro da transacao que acabou de tirar alguem - nunca numa transacao
+ * propria depois. Entre o commit da saida e o begin da promocao, um "Vou" de
+ * quem nao esta na reserva pegaria o lock, veria a vaga livre e entraria: a
+ * reserva perderia a vaga que acabou de ganhar, que e exatamente a corrida
+ * que ela existe pra acabar.
+ *
+ * RECONTA em vez de somar as vagas liberadas, por dois motivos: goleiro que
+ * sai nao abre vaga de linha (a contagem simplesmente nao muda, sem `if`
+ * nenhum), e se a lista estiver com vaga sobrando por correcao manual no
+ * banco - ja aconteceu neste projeto - a reserva preenche em vez de ignorar.
+ */
+async function promoverNaTransacao(
+  client: PoolClient,
+  partida: Partida,
+): Promise<Promovido[]> {
+  const contagem = await contarComLock(client, partida.id);
+  const livres = partida.vagas_total - contagem.linha;
+  const proximos = await reserva.retirarProximos(client, partida.id, livres);
+
+  for (const p of proximos) {
+    // Mesmo insert de qualquer entrada de fixo - nao um caminho paralelo.
+    // `criado_em` e agora, de proposito: na lista publicada quem subiu
+    // aparece por ULTIMO, porque foi a confirmacao mais recente. Herdar a
+    // data de entrada na reserva o colocaria na frente de quem confirmou
+    // enquanto ele esperava.
+    await client.query(
+      `insert into inscricao (partida_id, tipo, posicao, jogador_id)
+       values ($1, 'fixo', 'linha', $2)`,
+      [partida.id, p.jogadorId],
+    );
+  }
+  return proximos;
+}
+
 export interface Confirmacao {
   readonly posicao: Posicao;
   /** Ja estava na lista, exatamente nesta posicao: nada mudou. */
@@ -305,6 +344,71 @@ export async function confirmarFixo(
   });
 }
 
+/**
+ * Como terminou o toque em "🕒 Reserva".
+ *
+ * `cabe_vaga` nao e erro: e o caso de quem tocou na reserva com a lista ainda
+ * aberta - na quarta, logo que a enquete sobe, a opcao ja esta la. Ficar de
+ * fora tendo vaga sobrando e o pior desfecho possivel, entao o bot recusa o
+ * toque e manda a pessoa de volta pro "Vou".
+ */
+export type Reserva =
+  | { readonly tipo: 'reservado'; readonly posicao: number; readonly jaEstava: boolean }
+  | { readonly tipo: 'cabe_vaga'; readonly ocupadas: number }
+  | { readonly tipo: 'ja_esta_na_lista' };
+
+/** Poe na reserva, se e so se a lista de linha estiver cheia agora. */
+export async function reservarVaga(
+  partida: Partida,
+  jogadorId: number,
+  querConvidado: boolean,
+): Promise<Reserva> {
+  return transaction(async (client) => {
+    // Mesma contagem travada que decide toda entrada: sem o lock, um "Vou" de
+    // outra pessoa entrando no mesmo instante faria os dois lerem 17/18 - um
+    // entraria na lista e o outro ficaria de fora achando que ainda cabia.
+    const contagem = await contarComLock(client, partida.id);
+
+    const jaInscrito = await client.query(
+      `select 1 from inscricao
+        where partida_id = $1 and jogador_id = $2 and removido_em is null`,
+      [partida.id, jogadorId],
+    );
+    if (jaInscrito.rowCount !== 0) return { tipo: 'ja_esta_na_lista' as const };
+
+    if (contagem.linha < partida.vagas_total) {
+      return { tipo: 'cabe_vaga' as const, ocupadas: contagem.linha };
+    }
+
+    const entrada = await reserva.entrarNaTransacao(
+      client,
+      partida.id,
+      jogadorId,
+      querConvidado,
+    );
+    return {
+      tipo: 'reservado' as const,
+      posicao: entrada.posicao,
+      jaEstava: entrada.jaEstava,
+    };
+  });
+}
+
+/**
+ * Rede de seguranca horaria: preenche com a reserva qualquer vaga de linha
+ * que esteja sobrando sem ninguem ter saido agora.
+ *
+ * Existe pelo mesmo motivo que `recuperarAberturaPerdida` e `fecharVencidas`:
+ * o container pode ter caido no meio da transacao de uma saida, ou uma
+ * inscricao pode ter sido corrigida na mao no banco. Sem isso, a vaga fica
+ * aberta com gente esperando por ela - e ninguem descobre ate o digest.
+ */
+export async function promoverPendentes(
+  partida: Partida,
+): Promise<Promovido[]> {
+  return transaction(async (client) => promoverNaTransacao(client, partida));
+}
+
 export interface Desistencia {
   /** Posicao de quem saiu. Goleiro saindo e o pior caso e merece alerta. */
   readonly posicao: Posicao;
@@ -332,6 +436,8 @@ export interface Desistencia {
     nome: string;
     posicao: Posicao;
   }[];
+  /** Quem subiu da reserva para as vagas que esta saida abriu. */
+  readonly promovidos: readonly Promovido[];
 }
 
 /** Sai da lista e leva junto os convidados que trouxe. */
@@ -373,6 +479,8 @@ export async function desistir(
         returning id, convidado_nome, posicao`,
       [partida.id, jogadorId],
     );
+    const promovidos = await promoverNaTransacao(client, partida);
+
     return ok({
       posicao: minhaPosicao,
       abriuVaga,
@@ -381,6 +489,7 @@ export async function desistir(
         nome: r.convidado_nome,
         posicao: r.posicao,
       })),
+      promovidos,
     });
   });
 }
@@ -442,6 +551,8 @@ export type Remocao =
       readonly posicao: Posicao;
       /** Mesmo calculo e mesmo motivo de `Desistencia.abriuVaga`. */
       readonly abriuVaga: boolean;
+      /** Quem subiu da reserva para a vaga que esta remocao abriu. */
+      readonly promovidos: readonly Promovido[];
     }
   | { readonly tipo: 'sem_convidados' }
   | { readonly tipo: 'nao_encontrado'; readonly seus: readonly string[] }
@@ -504,11 +615,13 @@ export async function removerConvidado(
     await client.query('update inscricao set removido_em = now() where id = $1', [
       unico.id,
     ]);
+    const promovidos = await promoverNaTransacao(client, partida);
     return {
       tipo: 'removido',
       nome: unico.convidado_nome,
       posicao: unico.posicao,
       abriuVaga,
+      promovidos,
     };
   });
 }

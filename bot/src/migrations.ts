@@ -397,4 +397,68 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    // Reserva (18/09/2026): a disputa por vaga ficou grande, e ate aqui quem
+    // votava "Vou" com a lista cheia era so recusado - a vaga que abrisse
+    // depois ia pra quem visse a mensagem primeiro. Corrida que premia quem
+    // esta com o celular na mao, nao quem pediu primeiro.
+    //
+    // A enquete ganha a 4a opcao "Reserva" (ver OPCAO_RESERVA em
+    // domain/enquete.ts). Quem esta na reserva sobe SOZINHO quando alguem sai,
+    // por ordem de chegada.
+    //
+    // Tabela propria, e nao uma coluna de estado em `inscricao`, pelo mesmo
+    // motivo que o goleiro virou lista propria na migration 011: hoje toda
+    // contagem de vaga, a lista publicada, o convite de avaliacao e as
+    // estatisticas do site filtram por `removido_em is null` e assumem que
+    // linha viva em `inscricao` = vaga OCUPADA. Uma coluna nova ali faria
+    // todas elas passarem a contar quem esta na reserva como confirmado - e a
+    // proxima query escrita nasceria errada, em silencio. Aqui, quem nao
+    // souber da reserva continua certo por construcao.
+    //
+    // So fixo entra na reserva: convidado nao vota na enquete, e quem sobe
+    // ocupa uma vaga so (o convidado entra depois, pelo fluxo normal).
+    name: '018_reserva',
+    sql: `
+      create table reserva (
+        id         serial primary key,
+        partida_id int not null references partida(id) on delete cascade,
+        jogador_id int not null references jogador(id) on delete cascade,
+        -- Votou "Vou com convidado", a lista estava cheia e ele foi pra
+        -- reserva: a intencao fica guardada aqui porque a tabela inscricao nao
+        -- consegue representa-la (inscricao_tipo_coerente exige
+        -- convidado_nome, e o nome ainda nao existe). Ao subir, o convidado
+        -- NAO sobe junto - o bot pergunta o nome se ainda couber vaga.
+        quer_convidado boolean not null default false,
+        -- A ordem da reserva. Nunca reescrito: trocar "Vou" por "Vou com
+        -- convidado" nao pode custar o lugar na fila.
+        criado_em  timestamptz not null default now(),
+        saiu_em    timestamptz,
+        motivo_saida text,
+        constraint reserva_saida_coerente check (
+          (saiu_em is null and motivo_saida is null)
+          -- A checagem de nulo NAO e redundante com o IN: em SQL,
+          -- "null in (...)" devolve NULL, e um CHECK que da NULL passa. Sem
+          -- esta linha da pra marcar a saida sem dizer por que, e a linha fica
+          -- num estado que o codigo nunca produz mas o banco aceita.
+          or (saiu_em is not null
+              and motivo_saida is not null
+              and motivo_saida in ('promovido', 'desistiu', 'fechou'))
+        )
+      );
+
+      -- Mesma ideia do inscricao_fixo_unica: uma pessoa ocupa no maximo UM
+      -- lugar ativo na reserva. Parcial, entao sair e voltar continua
+      -- possivel (e quem volta vai pro fim). E tambem a idempotencia contra a
+      -- reentrega do webhook - a Evolution reentrega ate 10 vezes.
+      create unique index reserva_jogador_unica
+        on reserva (partida_id, jogador_id)
+        where saiu_em is null;
+
+      -- A reserva e sempre lida inteira e em ordem de chegada.
+      create index reserva_partida_ativa
+        on reserva (partida_id, criado_em, id)
+        where saiu_em is null;
+    `,
+  },
 ];
