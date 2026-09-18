@@ -292,7 +292,15 @@ async function main() {
   // Antes de aceitar trafego: um webhook chegando com tabela faltando viraria
   // erro no meio do grupo.
   await migrate(app.log);
-  iniciarAgendador(app.log);
+  if (config.AGENDADOR === 'ligado') {
+    iniciarAgendador(app.log);
+  } else {
+    // Ver AGENDADOR em config.ts: em nivel warn, e nao info, porque um bot que
+    // deveria estar agendando e nao esta e uma semana inteira sem enquete.
+    app.log.warn(
+      'AGENDADOR=desligado: sem crons e sem faxina de boot. O bot so responde ao que chegar.',
+    );
+  }
 
   await app.listen({ port: config.BOT_PORT, host: '0.0.0.0' });
 }

@@ -52,6 +52,22 @@ const schema = z.object({
   // texto, que e pior do que nao entrar: ela acha que reservou e nao reservou.
   RESERVA_TOTAL: z.coerce.number().int().nonnegative().default(6),
 
+  // Liga/desliga TODO o agendador: os crons e, principalmente, a faxina de
+  // BOOT (`recuperarAberturaPerdida`, `fecharVencidas`, `encerrarPartida`).
+  //
+  // Existe por causa de um incidente real, em 18/09/2026: subir um segundo bot
+  // apontado para o grupo do comite, so para conferir que o build estava de
+  // pe, fez ele publicar anuncio e enquete naquele grupo em 2 segundos. O
+  // banco de teste estava vazio, entao a partida da semana parecia nunca ter
+  // sido aberta, e a recuperacao de boot fez exatamente o que faria em
+  // producao - que e o certo, ali.
+  //
+  // Um bot de teste precisa FALAR SO QUANDO MANDAM. Com 'desligado' ele
+  // atende webhook normalmente (o que o teste precisa) e nao toma nenhuma
+  // iniciativa; quem quiser abrir a lista roda `dev/simular-abertura.ts` de
+  // proposito. Producao nunca passa daqui: o default e 'ligado'.
+  AGENDADOR: z.enum(['ligado', 'desligado']).default('ligado'),
+
   // Cron do agendador (horario local do container, TZ=America/Sao_Paulo).
   CRON_ABRE_FIXOS: z.string().default('0 12 * * 3'), // quarta 12:00
   CRON_ABRE_CONVIDADOS: z.string().default('0 12 * * 4'), // quinta 12:00

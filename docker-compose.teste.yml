@@ -1,0 +1,72 @@
+# Ambiente de TESTE, separado da producao.
+#
+# Sobe um SEGUNDO bot, com banco proprio e o grupo do comite no lugar do grupo
+# do racha, para o comite ver uma mudanca funcionando antes de ela valer pra
+# valer. Nao substitui a producao: os dois containers coexistem, e o que decide
+# quem recebe os eventos e o webhook da Evolution (ver scripts/teste-iniciar.sh).
+#
+# Roda a partir do diretorio de PRODUCAO, para reaproveitar o .env (segredos,
+# JID do grupo do comite, chave da Evolution) sem copiar nada:
+#
+#   SRC_TESTE=/root/racha-reserva/bot/src \
+#     docker compose -f docker-compose.teste.yml -p racha-teste up -d --build
+#
+# `make teste-iniciar` faz isso e o resto. NAO tem porta publicada: quem fala
+# com ele e a Evolution, por dentro da rede do Compose.
+name: racha-teste
+
+services:
+  bot-teste:
+    build:
+      context: ${SRC_TESTE:-/root/racha-reserva/bot}/..
+      target: dev
+    image: racha-bot-teste:local
+    container_name: racha_bot_teste
+    # Sem restart automatico, de proposito: ambiente de teste que volta sozinho
+    # depois de um reboot e ambiente esquecido no ar.
+    restart: "no"
+    command: ["npm", "run", "dev"]
+    volumes:
+      - ${SRC_TESTE:-/root/racha-reserva/bot/src}:/app/src:ro
+    # Herda os segredos da producao (chave da Evolution, senha do banco, token
+    # do webhook, identidade do racha) e sobrescreve so o que muda no teste.
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ}
+      NODE_ENV: development
+      LOG_LEVEL: debug
+      BOT_PORT: "3000"
+      # Banco PROPRIO: criar uma partida de 2 vagas no banco real sujaria o
+      # historico e as estatisticas publicadas no site.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/racha_teste
+      EVOLUTION_URL: http://evolution:8080
+      # TRAVA PRINCIPAL. Sem ela, o bot de teste publica anuncio e enquete no
+      # grupo do comite 2 segundos depois de subir: a faxina de boot ve o banco
+      # de teste vazio, conclui que a lista da semana nunca abriu, e "recupera".
+      # Foi o que aconteceu em 18/09/2026. Com o agendador desligado ele so
+      # responde ao que chega, e a enquete do teste sai quando o script mandar.
+      AGENDADOR: "desligado"
+      # O grupo do COMITE faz as vezes do grupo do racha. O bot so responde no
+      # GROUP_JID (server.ts), entao e assim que ele passa a ouvir la.
+      GROUP_JID: ${GRUPO_ADMIN_JID}
+      # Vazio para o bot de teste nao mandar aviso de abertura no mesmo grupo
+      # em que esta testando - sairia duas vezes a mesma coisa.
+      GRUPO_ADMIN_JID: ""
+      # O teste inteiro cabe em 2 vagas: duas pessoas fecham a lista na hora.
+      VAGAS_TOTAL: "2"
+      VAGAS_GOLEIRO: "0"
+      # 4 na reserva: com 7 pessoas no comite, 2 entram, 4 enchem a fila e a
+      # setima bate no teto - que e o caminho que so aparece com limite baixo.
+      RESERVA_TOTAL: "4"
+      MIN_JOGADORES: "2"
+      ALERTA_VAGAS: "1"
+      # Sem publicar estatisticas a partir do teste.
+      GITHUB_TOKEN: ""
+    networks:
+      - racha
+
+networks:
+  racha:
+    external: true
+    name: racha_racha-net

@@ -79,6 +79,19 @@ reset-instance: ## Apaga a instancia para parear OUTRO numero (nao apaga o banco
 		-H "apikey: $(KEY)"; echo; \
 	echo "Rode 'make setup' e depois 'make qr'."
 
+.PHONY: teste-iniciar
+teste-iniciar: ## Liga o ambiente de teste (grupo do comite) - ver TESTE-RESERVA.md
+	@bash scripts/teste-iniciar.sh
+
+.PHONY: teste-encerrar
+teste-encerrar: ## Desliga o teste e devolve o bot de producao ao ar
+	@bash scripts/teste-encerrar.sh
+
+.PHONY: teste-status
+teste-status: ## Mostra para qual bot o webhook esta apontando agora
+	@echo -n "webhook -> "; curl -sS "http://localhost:8080/webhook/find/$(INSTANCE)" 		-H "apikey: $(KEY)" | grep -o '"url":"[^"]*"' | cut -d'"' -f4
+	@docker ps --filter name=racha_bot_teste --format '  teste: {{.Status}}' | grep . 		|| echo "  teste: desligado"
+
 .PHONY: backup
 backup: ## Backup do Postgres e da sessao do WhatsApp
 	@bash scripts/backup.sh
