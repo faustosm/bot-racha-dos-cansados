@@ -47,18 +47,24 @@ const cenarios = {
     cabecalho: '✅ Otavio marcou que vai.',
     itens: jogadores(config.VAGAS_TOTAL - 2),
   },
-  // Alguem tenta entrar com a lista ja cheia. O cabecalho sai do MESMO
-  // `motivoDaRecusa` que o bot usa de verdade.
+  // Fixo marcando presenca com a lista ja cheia: ele NAO e recusado, entra na
+  // reserva. E a linha unica que o bot manda no grupo nesse caso.
+  reserva: {
+    cabecalho: '🪑 Rafael entrou na reserva (1º da fila). Se alguém sair, entra na hora.',
+    itens: jogadores(config.VAGAS_TOTAL),
+    // O aviso de reserva nao republica a lista: a fila costuma receber varias
+    // pessoas seguidas, e uma lista inteira por reserva viraria mural de bot.
+    semLista: true,
+  },
+  // Convidado tentando entrar com a fila formada - este sim e recusado, e o
+  // cabecalho sai do MESMO `motivoDaRecusa` que o bot usa de verdade.
   recusado: {
     cabecalho: (() => {
       const partida = { vagas_total: config.VAGAS_TOTAL };
-      const motivo = motivoDaRecusa(config.VAGAS_TOTAL, partida, 1);
+      const motivo = motivoDaRecusa(config.VAGAS_TOTAL + 2, partida, 1);
       return `⚠️ Rafael: ${motivo}`;
     })(),
-    itens: jogadores(config.VAGAS_TOTAL),
-    // A recusa nao republica a lista: nada mudou, e cada tentativa depois de
-    // lotar geraria mais uma copia identica no grupo. Este cenario existe
-    // exatamente para mostrar a mensagem sozinha, como o bot manda.
+    itens: jogadores(config.VAGAS_TOTAL + 2),
     semLista: true,
   },
 } as const;

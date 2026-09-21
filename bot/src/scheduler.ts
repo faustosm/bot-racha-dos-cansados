@@ -68,6 +68,7 @@ export async function anunciarAberturaFixos(
       ...(config.RACHA_ENDERECO ? [`📍 ${config.RACHA_ENDERECO}`] : []),
       '',
       `Lista aberta! ${partida.vagas_total} vagas de linha.`,
+      '🪑 Passou das vagas, ninguém fica de fora: entra na RESERVA, na ordem — e sobe automaticamente se alguém sair.',
       `🧤 Goleiro (até ${partida.vagas_goleiro}) é convidado de quem já confirmou, ou contratado por fora — lista à parte.`,
       '',
       'Responda na enquete abaixo 👇',
@@ -168,6 +169,9 @@ async function abrirParaConvidados(log: Log): Promise<void> {
   // confirmaram cedo). Anunciar "pode trazer convidado" nesse caso e enganoso -
   // quem tentar sera recusado na hora, depois de ja ter sido convidado a trazer
   // alguem. Sem vaga de linha, nao ha o que liberar.
+  //
+  // `livres` ja conta a reserva (ver contarVagas): com gente na fila nao ha
+  // vaga pra convidado nenhum, porque a proxima que abrir e de quem espera.
   if (contarVagas(itens, partida.vagas_total).livres === 0) {
     log.info(
       { partida: partida.data_jogo },

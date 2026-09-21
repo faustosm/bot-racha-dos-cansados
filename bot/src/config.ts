@@ -44,6 +44,9 @@ const schema = z.object({
   // --- Regras do racha -----------------------------------------------------
   // A lista de linha e separada da lista de goleiro (13/08/2026): goleiro tem
   // teto proprio (VAGAS_GOLEIRO) e nunca ocupa vaga dos 18.
+  //
+  // VAGAS_TOTAL e quantos JOGAM, nao quantos podem se inscrever: passando
+  // disso o fixo entra na reserva (21/09/2026, ver domain/lista.ts).
   VAGAS_TOTAL: z.coerce.number().int().positive().default(18),
   VAGAS_GOLEIRO: z.coerce.number().int().nonnegative().default(2),
 

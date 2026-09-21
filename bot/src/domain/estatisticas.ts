@@ -89,13 +89,24 @@ interface LinhaComposicao {
   goleiros: string;
 }
 
+// So quem estava DENTRO das vagas no fim (pos <= vagas_total) - desde
+// 21/09/2026 a lista de linha aceita fila de espera, e quem ficou na reserva
+// nao jogou. Contar a fila aqui daria "20/18" no grafico de composicao e uma
+// taxa de lotacao acima de 100%.
 const SQL_COMPOSICAO = `
+  with linha as (
+    select i.partida_id, i.tipo,
+           row_number() over (partition by i.partida_id order by i.criado_em, i.id) as pos
+      from inscricao i
+     where i.removido_em is null and i.posicao = 'linha'
+  )
   select p.id, p.data_jogo, p.vagas_total,
-         count(*) filter (where i.tipo = 'fixo' and i.posicao = 'linha') as fixos,
-         count(*) filter (where i.tipo = 'convidado' and i.posicao = 'linha') as convidados,
-         count(*) filter (where i.posicao = 'gol') as goleiros
+         count(*) filter (where l.tipo = 'fixo' and l.pos <= p.vagas_total) as fixos,
+         count(*) filter (where l.tipo = 'convidado' and l.pos <= p.vagas_total) as convidados,
+         (select count(*) from inscricao g
+           where g.partida_id = p.id and g.removido_em is null and g.posicao = 'gol') as goleiros
     from partida p
-    left join inscricao i on i.partida_id = p.id and i.removido_em is null
+    left join linha l on l.partida_id = p.id
    where p.status = 'fechada'
    group by p.id, p.data_jogo, p.vagas_total
    order by p.data_jogo
@@ -134,12 +145,20 @@ interface LinhaPresenca {
   data_jogo: string;
 }
 
+// Presenca e quem JOGOU: mesma regra de `SQL_COMPOSICAO`, a fila de reserva
+// fica de fora.
 const SQL_PRESENCA = `
-  select i.jogador_id, coalesce(j.nome_escolhido, j.nome) as nome, p.data_jogo
-    from inscricao i
-    join jogador j on j.id = i.jogador_id
-    join partida p on p.id = i.partida_id
-   where i.removido_em is null and i.tipo = 'fixo' and p.status = 'fechada'
+  with linha as (
+    select i.partida_id, i.tipo, i.jogador_id,
+           row_number() over (partition by i.partida_id order by i.criado_em, i.id) as pos
+      from inscricao i
+     where i.removido_em is null and i.posicao = 'linha'
+  )
+  select l.jogador_id, coalesce(j.nome_escolhido, j.nome) as nome, p.data_jogo
+    from linha l
+    join partida p on p.id = l.partida_id
+    join jogador j on j.id = l.jogador_id
+   where l.tipo = 'fixo' and p.status = 'fechada' and l.pos <= p.vagas_total
    order by nome, p.data_jogo
 `;
 

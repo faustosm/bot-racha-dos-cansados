@@ -4,33 +4,65 @@ import type { ItemGoleiro, ItemLista, Partida, Posicao } from './tipos.js';
 // Sem banco e sem HTTP, o que torna o formato testavel com node --test.
 
 export interface Vagas {
+  /** Quantos estao DENTRO das vagas (nunca passa de `total`). */
   readonly ocupadas: number;
   readonly total: number;
   readonly livres: number;
+  /** Quantos estao na fila de espera, alem das vagas. */
+  readonly reservas: number;
 }
 
 /**
  * Conta so os jogadores de LINHA - goleiro tem teto e contagem propria
  * (`motivoRecusaGoleiro`, `listarGoleiros`) e nunca ocupa vaga da linha.
- * A lista de linha fecha em 18.
+ *
+ * A lista de linha aceita mais gente do que as vagas (decisao de 21/09/2026):
+ * fixo nunca e recusado, so passa a ser RESERVA. Por isso `ocupadas` nao e
+ * `itens.length` - ela para no teto, e o excedente vira `reservas`. Quem chama
+ * para decidir se cabe mais alguem (convidado) continua olhando `livres`, que
+ * e zero enquanto houver fila: a vaga que abrir e de quem esta esperando.
  */
 export function contarVagas(
   itens: readonly ItemLista[],
   vagasTotal: number,
 ): Vagas {
   return {
-    ocupadas: itens.length,
+    ocupadas: Math.min(itens.length, vagasTotal),
     total: vagasTotal,
     livres: Math.max(0, vagasTotal - itens.length),
+    reservas: Math.max(0, itens.length - vagasTotal),
   };
 }
 
-/** Ha vaga para mais alguem? */
+/** Ha vaga para mais alguem? Com fila de espera, nao ha. */
 export function cabeMais(vagas: Vagas): boolean {
   return vagas.livres > 0;
 }
 
-/** Por que essa pessoa nao pode entrar, se nao puder. */
+/**
+ * Quem esta convocado e quem esta na fila, pela ordem de confirmacao.
+ *
+ * A ordem de chegada e o criterio: ela decide quem sao os 18 e quem sobe
+ * quando alguem sai. Os itens ja chegam ordenados por `criado_em` do banco.
+ */
+export function separarFila(
+  itens: readonly ItemLista[],
+  vagasTotal: number,
+): { convocados: readonly ItemLista[]; reserva: readonly ItemLista[] } {
+  return {
+    convocados: itens.slice(0, vagasTotal),
+    reserva: itens.slice(vagasTotal),
+  };
+}
+
+/**
+ * Por que esse CONVIDADO nao pode entrar, se nao puder.
+ *
+ * Vale so para convidado: fixo entra sempre (vira reserva se as vagas ja
+ * acabaram). `ocupadas` e o total de gente na linha, fila inclusa - e por isso
+ * que um convidado e recusado enquanto houver reserva esperando: a proxima
+ * vaga ja tem dono.
+ */
 export function motivoDaRecusa(
   ocupadas: number,
   partida: Pick<Partida, 'vagas_total'>,
@@ -38,12 +70,17 @@ export function motivoDaRecusa(
 ): string | undefined {
   const livres = partida.vagas_total - ocupadas;
   if (quantas <= livres) return undefined;
-  return livres <= 0
-    ? `A lista está completa (${partida.vagas_total} jogadores de linha).`
-    : `Só resta${livres === 1 ? '' : 'm'} ${livres} vaga${livres === 1 ? '' : 's'}.`;
+  if (livres > 0) {
+    return `Só resta${livres === 1 ? '' : 'm'} ${livres} vaga${livres === 1 ? '' : 's'}.`;
+  }
+  const naFila = ocupadas - partida.vagas_total;
+  const completa = `A lista está completa (${partida.vagas_total} jogadores de linha).`;
+  return naFila > 0
+    ? `${completa} Tem ${naFila} ${naFila === 1 ? 'pessoa' : 'pessoas'} na reserva na frente — a próxima vaga é de quem está esperando.`
+    : completa;
 }
 
-/** Por que um goleiro nao pode entrar, se nao puder. Teto proprio, separado da linha. */
+/** Por que um goleiro nao pode entrar, se nao puder. Teto proprio, sem fila. */
 export function motivoRecusaGoleiro(
   ocupados: number,
   vagasGoleiro: number,
@@ -123,6 +160,11 @@ function linhaGoleiro(g: ItemGoleiro, presentes: ReadonlySet<number>): string {
  * saber quem chegou primeiro e quem chegou por ultimo, e duas numeracoes
  * paralelas destruiriam essa leitura.
  *
+ * A RESERVA sai no mesmo texto, logo abaixo dos convocados e com a numeracao
+ * continuando (19, 20...): e a mesma fila, so que a partir dali as pessoas
+ * estao esperando vaga. Quem le precisa ver as duas coisas de uma vez - quem
+ * joga sabado e quem entra se alguem cair.
+ *
  * Goleiro e lista PROPRIA, a parte - nunca entra na numeracao nem no X/18.
  */
 export function formatarLista(
@@ -132,9 +174,12 @@ export function formatarLista(
   nomeDoRacha = 'Racha',
 ): string {
   const vagas = contarVagas(itens, partida.vagas_total);
+  const { convocados, reserva } = separarFila(itens, partida.vagas_total);
 
   const partes: string[] = [
-    `⚽ ${nomeDoRacha} — ${rotuloData(partida.data_jogo)} · ${vagas.ocupadas}/${vagas.total}`,
+    `⚽ ${nomeDoRacha} — ${rotuloData(partida.data_jogo)} · ${vagas.ocupadas}/${vagas.total}${
+      vagas.reservas ? ` (+${vagas.reservas} na reserva)` : ''
+    }`,
     '',
   ];
 
@@ -145,10 +190,20 @@ export function formatarLista(
   );
 
   partes.push(
-    ...(itens.length
-      ? itens.map((item, n) => linhaItem(n + 1, item, presentes))
+    ...(convocados.length
+      ? convocados.map((item, n) => linhaItem(n + 1, item, presentes))
       : ['  ninguém confirmou ainda']),
   );
+
+  if (reserva.length) {
+    partes.push(
+      '',
+      '🪑 Reserva (entra na ordem, se alguém sair):',
+      ...reserva.map((item, n) =>
+        linhaItem(partida.vagas_total + n + 1, item, presentes),
+      ),
+    );
+  }
 
   partes.push(
     '',
@@ -156,7 +211,11 @@ export function formatarLista(
     // linha so deixava parecer que os goleiros contam dentro do X/18. Precisa
     // ficar claro que sao dois times diferentes de gente, ou membros com mais
     // dificuldade de leitura entendem que a lista inclui goleiro.
-    `${vagas.ocupadas}/${vagas.total} de linha.`,
+    `${vagas.ocupadas}/${vagas.total} de linha${
+      vagas.reservas
+        ? ` e ${vagas.reservas} na reserva`
+        : ''
+    }.`,
     goleiros.length
       ? `🧤 Goleiros: ${goleiros.map((g) => linhaGoleiro(g, presentes)).join(', ')}.`
       : '🧤 Goleiro: nenhum confirmado ainda.',
@@ -176,7 +235,16 @@ export function formatarLista(
  */
 export function alertasDeVagas(vagas: Vagas, limiar: number): string[] {
   if (vagas.livres === 0) {
-    return [`🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha.`];
+    // Com fila, "lista completa" sozinho soaria como "nao adianta marcar" -
+    // e adianta: quem marca agora fica na reserva e sobe se alguem cair.
+    return vagas.reservas
+      ? [
+          `🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha, ${vagas.reservas} na reserva.`,
+        ]
+      : [
+          `🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha.`,
+          'Quem marcar a partir de agora entra na reserva.',
+        ];
   }
   if (vagas.livres <= limiar) {
     return [

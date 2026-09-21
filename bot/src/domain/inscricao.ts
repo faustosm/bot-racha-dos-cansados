@@ -8,7 +8,20 @@ import type {
   Partida,
   Posicao,
   Resultado,
+  TipoInscricao,
 } from './tipos.js';
+
+/**
+ * Alguem que passou a estar dentro das vagas quando outro saiu - a "promocao"
+ * da reserva. Nao e um estado no banco: e so o resultado da comparacao feita
+ * em `diferencaDeConvocados`.
+ */
+export interface Promovido {
+  readonly inscricaoId: number;
+  readonly nome: string;
+  /** Id do jogador quando e um fixo; convidado nao tem cadastro proprio. */
+  readonly jogadorId: number | null;
+}
 
 interface LinhaLista {
   id: number;
@@ -129,13 +142,20 @@ export interface FixoConfirmado {
 }
 
 const SQL_FIXOS_CONFIRMADOS = `
+  with linha as (
+    select i.id, i.tipo, i.jogador_id,
+           row_number() over (order by i.criado_em, i.id) as pos
+      from inscricao i
+     where i.partida_id = $1
+       and i.removido_em is null
+       and i.posicao = 'linha'
+  )
   select j.id as jogador_id, j.telefone, j.lid, j.nao_perturbe
-    from inscricao i
-    join jogador j on j.id = i.jogador_id
-   where i.partida_id = $1
-     and i.removido_em is null
-     and i.tipo = 'fixo'
-     and i.posicao = 'linha'
+    from linha l
+    join jogador j on j.id = l.jogador_id
+    join partida p on p.id = $1
+   where l.tipo = 'fixo'
+     and l.pos <= p.vagas_total
 `;
 
 /**
@@ -143,6 +163,10 @@ const SQL_FIXOS_CONFIRMADOS = `
  * `encerrarPartida`). Mesma fonte de verdade de `listar` (fixo de linha
  * confirmado) - so que aqui interessa telefone/lid/nao_perturbe da PESSOA,
  * nao o nome para exibir na lista.
+ *
+ * So os CONVOCADOS (`pos <= vagas_total`): quem ficou na reserva ate o fim
+ * nao jogou, e pedir nota do jogo a quem nao jogou e tao errado quanto mandar
+ * para quem saiu do grupo (ver `enviarConvitesDeAvaliacao`).
  */
 export async function listarFixosConfirmados(
   partidaId: number,
@@ -194,20 +218,109 @@ async function contarComLock(
  * `confirmarFixo` so ganhou a checagem depois, retroativamente) - com um so
  * lugar, uma regra nova de elegibilidade nao pode deixar de valer em algum
  * dos pontos por esquecimento.
+ *
+ * Desde 21/09/2026 a linha nao tem teto para FIXO: passando das vagas ele
+ * entra na reserva, em vez de ser recusado. Convidado continua limitado - e
+ * limitado pela fila inteira, nao so pelas vagas (`motivoDaRecusa` conta a
+ * reserva): a proxima vaga e de quem ja esta esperando.
  */
 function motivoDeCapacidade(
   contagem: { linha: number; gols: number },
   partida: Partida,
   posicao: Posicao,
+  tipo: TipoInscricao,
 ): string | undefined {
-  return posicao === 'gol'
-    ? motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro)
-    : motivoDaRecusa(contagem.linha, partida, 1);
+  if (posicao === 'gol') {
+    return motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro);
+  }
+  if (tipo === 'fixo') return undefined;
+  return motivoDaRecusa(contagem.linha, partida, 1);
+}
+
+/**
+ * A posicao desta inscricao na fila da linha (1 = primeiro a confirmar).
+ * Maior que `vagas_total` significa reserva.
+ *
+ * Calculada por `row_number` sobre a mesma ordem que a lista publicada usa
+ * (`criado_em, id`), e nao guardada em coluna: assim ninguem precisa
+ * "promover" ninguem no banco - sai um convocado, quem vinha atras ja e o
+ * proximo, por construcao.
+ */
+async function posicaoNaLinha(
+  client: PoolClient,
+  partidaId: number,
+  inscricaoId: number,
+): Promise<number> {
+  const { rows } = await client.query<{ pos: string }>(
+    `select pos from (
+       select id, row_number() over (order by criado_em, id) as pos
+         from inscricao
+        where partida_id = $1 and removido_em is null and posicao = 'linha'
+     ) t where id = $2`,
+    [partidaId, inscricaoId],
+  );
+  return Number(rows[0]?.pos ?? 0);
+}
+
+/** Quem esta DENTRO das vagas agora, na ordem. */
+async function convocadosDaLinha(
+  client: PoolClient,
+  partida: Partida,
+): Promise<Promovido[]> {
+  const { rows } = await client.query<{
+    id: number;
+    nome: string;
+    jogador_id: number | null;
+  }>(
+    `select i.id,
+            coalesce(j.nome_escolhido, j.nome, i.convidado_nome) as nome,
+            i.jogador_id
+       from inscricao i
+       left join jogador j on j.id = i.jogador_id
+      where i.partida_id = $1
+        and i.removido_em is null
+        and i.posicao = 'linha'
+      order by i.criado_em, i.id
+      limit $2`,
+    [partida.id, partida.vagas_total],
+  );
+  return rows.map((r) => ({
+    inscricaoId: r.id,
+    nome: r.nome,
+    jogadorId: r.jogador_id,
+  }));
+}
+
+/**
+ * Quem passou a estar dentro das vagas por causa de uma saida.
+ *
+ * Comparar o conjunto de convocados ANTES e DEPOIS, em vez de "pegar o
+ * primeiro da reserva", cobre de graca o caso em que uma saida so libera
+ * VARIAS vagas: quem desiste leva os convidados junto, e ai sobe mais de uma
+ * pessoa de uma vez.
+ */
+function diferencaDeConvocados(
+  antes: readonly Promovido[],
+  depois: readonly Promovido[],
+): Promovido[] {
+  const jaEstavam = new Set(antes.map((c) => c.inscricaoId));
+  return depois.filter((c) => !jaEstavam.has(c.inscricaoId));
 }
 
 
 export interface Confirmacao {
   readonly posicao: Posicao;
+  /**
+   * Entrou (ou continua) FORA das vagas, na fila de espera.
+   *
+   * Fixo nunca e recusado desde 21/09/2026 - passando das vagas ele fica na
+   * reserva e sobe sozinho quando alguem sai. Quem chama usa isto para dizer
+   * a pessoa que ela ainda nao esta escalada: sem esse aviso, o voto marcado
+   * na enquete faria ela achar que esta.
+   */
+  readonly reserva: boolean;
+  /** 1 = proximo a entrar. Zero quando esta convocado. */
+  readonly posicaoNaReserva: number;
   /** Ja estava na lista, exatamente nesta posicao: nada mudou. */
   readonly jaEstava: boolean;
   /** Entrou agora. Falso quando apenas trocou de linha para gol ou vice-versa. */
@@ -226,6 +339,23 @@ export interface Confirmacao {
    * em silencio.
    */
   readonly lotouAgora: boolean;
+}
+
+/**
+ * Traduz a posicao na fila em "esta na reserva?" + "que lugar?". Goleiro nao
+ * tem fila: teto rigido, sem espera (ver `motivoRecusaGoleiro`).
+ */
+async function filaDe(
+  client: PoolClient,
+  partida: Partida,
+  inscricaoId: number,
+  posicao: Posicao,
+): Promise<{ reserva: boolean; posicaoNaReserva: number }> {
+  if (posicao !== 'linha') return { reserva: false, posicaoNaReserva: 0 };
+  const pos = await posicaoNaLinha(client, partida.id, inscricaoId);
+  return pos > partida.vagas_total
+    ? { reserva: true, posicaoNaReserva: pos - partida.vagas_total }
+    : { reserva: false, posicaoNaReserva: 0 };
 }
 
 /** A inscricao ativa da pessoa nesta partida, se houver. So leitura. */
@@ -266,12 +396,19 @@ export async function confirmarFixo(
     const existente = atual.rows[0];
     if (existente) {
       if (existente.posicao === posicao) {
-        return ok({ posicao, jaEstava: true, novo: false, lotouAgora: false });
+        const fila = await filaDe(client, partida, existente.id, posicao);
+        return ok({
+          posicao,
+          ...fila,
+          jaEstava: true,
+          novo: false,
+          lotouAgora: false,
+        });
       }
       // Troca de posicao: precisa caber no teto da posicao de DESTINO, seja
       // qual for - mesma checagem que toda entrada nova passa.
       const contagem = await contarComLock(client, partida.id);
-      const motivoTroca = motivoDeCapacidade(contagem, partida, posicao);
+      const motivoTroca = motivoDeCapacidade(contagem, partida, posicao, 'fixo');
       if (motivoTroca) return erro<Confirmacao>(motivoTroca);
       await client.query('update inscricao set posicao = $2 where id = $1', [
         existente.id,
@@ -279,8 +416,10 @@ export async function confirmarFixo(
       ]);
       // Trocou de posicao, mas ja estava na lista: quem chama nao deve
       // reperguntar sobre convidados nem repetir a conversa de boas-vindas.
+      const fila = await filaDe(client, partida, existente.id, posicao);
       return ok({
         posicao,
+        ...fila,
         jaEstava: false,
         novo: false,
         lotouAgora: posicao === 'linha' && contagem.linha + 1 === partida.vagas_total,
@@ -288,16 +427,24 @@ export async function confirmarFixo(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDeCapacidade(contagem, partida, posicao);
+    const motivo = motivoDeCapacidade(contagem, partida, posicao, 'fixo');
     if (motivo) return erro<Confirmacao>(motivo);
 
-    await client.query(
+    const inserida = await client.query<{ id: number }>(
       `insert into inscricao (partida_id, tipo, posicao, jogador_id)
-       values ($1, 'fixo', $2, $3)`,
+       values ($1, 'fixo', $2, $3)
+       returning id`,
       [partida.id, posicao, jogadorId],
+    );
+    const fila = await filaDe(
+      client,
+      partida,
+      inserida.rows[0]?.id ?? 0,
+      posicao,
     );
     return ok({
       posicao,
+      ...fila,
       jaEstava: false,
       novo: true,
       lotouAgora: posicao === 'linha' && contagem.linha + 1 === partida.vagas_total,
@@ -332,6 +479,11 @@ export interface Desistencia {
     nome: string;
     posicao: Posicao;
   }[];
+  /**
+   * Quem subiu da reserva por causa desta saida (pode ser mais de um quando
+   * o anfitriao leva convidados junto). Vazio quando nao havia fila.
+   */
+  readonly promovidos: readonly Promovido[];
 }
 
 /** Sai da lista e leva junto os convidados que trouxe. */
@@ -343,21 +495,29 @@ export async function desistir(
     // Conta ANTES de remover: depois da saida a contagem ja nao reflete mais
     // se a vaga dela era a ultima fechada.
     const antes = await contarComLock(client, partida.id);
+    const convocadosAntes = await convocadosDaLinha(client, partida);
 
-    const eu = await client.query<{ posicao: Posicao }>(
+    const eu = await client.query<{ id: number; posicao: Posicao }>(
       `update inscricao set removido_em = now()
         where partida_id = $1 and jogador_id = $2 and removido_em is null
-        returning posicao`,
+        returning id, posicao`,
       [partida.id, jogadorId],
     );
+    const minhaInscricaoId = eu.rows[0]?.id;
     const minhaPosicao = eu.rows[0]?.posicao;
-    if (!minhaPosicao) {
+    if (!minhaPosicao || minhaInscricaoId === undefined) {
       return erro<Desistencia>('Você não estava na lista.');
     }
 
     const teto = minhaPosicao === 'gol' ? partida.vagas_goleiro : partida.vagas_total;
     const ocupadasAntes = minhaPosicao === 'gol' ? antes.gols : antes.linha;
-    const abriuVaga = teto > 0 && ocupadasAntes >= teto;
+    // Quem sai da RESERVA nao libera nada: ele nem estava escalado. Sem esta
+    // checagem, uma desistencia no fim da fila geraria "liberou vaga!" no
+    // grupo com a lista seguindo exatamente igual.
+    const estavaEscalado =
+      minhaPosicao === 'gol' ||
+      convocadosAntes.some((c) => c.inscricaoId === minhaInscricaoId);
+    const abriuVaga = estavaEscalado && teto > 0 && ocupadasAntes >= teto;
 
     // Saem junto por padrao: e o desfecho mais provavel, e libera vaga na
     // hora. O bot pergunta em seguida se algum deles vai mesmo assim - assim,
@@ -373,9 +533,19 @@ export async function desistir(
         returning id, convidado_nome, posicao`,
       [partida.id, jogadorId],
     );
+    // Depois de tudo removido (a pessoa e os convidados dela): quem entrou no
+    // lugar. Calculado aqui dentro, na mesma transacao - fora dela outra
+    // confirmacao poderia se meter no meio e o "entrou no lugar" apontaria
+    // para a pessoa errada.
+    const promovidos = diferencaDeConvocados(
+      convocadosAntes,
+      await convocadosDaLinha(client, partida),
+    );
+
     return ok({
       posicao: minhaPosicao,
       abriuVaga,
+      promovidos,
       convidados: convidados.rows.map((r) => ({
         id: r.id,
         nome: r.convidado_nome,
@@ -414,7 +584,7 @@ export async function adicionarConvidado(
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDeCapacidade(contagem, partida, posicao);
+    const motivo = motivoDeCapacidade(contagem, partida, posicao, 'convidado');
     if (motivo) return erro<ItemLista>(motivo);
 
     const { rows } = await client.query<{ id: number }>(
@@ -442,6 +612,8 @@ export type Remocao =
       readonly posicao: Posicao;
       /** Mesmo calculo e mesmo motivo de `Desistencia.abriuVaga`. */
       readonly abriuVaga: boolean;
+      /** Quem subiu da reserva no lugar dele. */
+      readonly promovidos: readonly Promovido[];
     }
   | { readonly tipo: 'sem_convidados' }
   | { readonly tipo: 'nao_encontrado'; readonly seus: readonly string[] }
@@ -497,18 +669,28 @@ export async function removerConvidado(
     // Conta ANTES de remover - mesmo motivo de `desistir`: depois da saida a
     // contagem ja nao reflete mais se a vaga dele era a ultima fechada.
     const antes = await contarComLock(client, partida.id);
+    const convocadosAntes = await convocadosDaLinha(client, partida);
     const teto = unico.posicao === 'gol' ? partida.vagas_goleiro : partida.vagas_total;
     const ocupadasAntes = unico.posicao === 'gol' ? antes.gols : antes.linha;
-    const abriuVaga = teto > 0 && ocupadasAntes >= teto;
+    // Mesma regra de `desistir`: so libera vaga quem estava escalado.
+    const estavaEscalado =
+      unico.posicao === 'gol' ||
+      convocadosAntes.some((c) => c.inscricaoId === unico.id);
+    const abriuVaga = estavaEscalado && teto > 0 && ocupadasAntes >= teto;
 
     await client.query('update inscricao set removido_em = now() where id = $1', [
       unico.id,
     ]);
+    const promovidos = diferencaDeConvocados(
+      convocadosAntes,
+      await convocadosDaLinha(client, partida),
+    );
     return {
       tipo: 'removido',
       nome: unico.convidado_nome,
       posicao: unico.posicao,
       abriuVaga,
+      promovidos,
     };
   });
 }
@@ -549,8 +731,11 @@ export async function restaurarInscricao(
       );
     }
 
+    // Convidado, mesmo voltando: nao fura fila. Se a lista de linha ja esta
+    // cheia (com ou sem reserva atras), ele nao volta - a vaga seria de quem
+    // esta esperando.
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDeCapacidade(contagem, partida, alvo.posicao);
+    const motivo = motivoDeCapacidade(contagem, partida, alvo.posicao, 'convidado');
     if (motivo) return erro<{ nome: string; posicao: Posicao }>(motivo);
 
     await client.query(
