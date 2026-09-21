@@ -53,6 +53,31 @@ export async function anunciar(log: Log, texto: string): Promise<void> {
 }
 
 /**
+ * O texto do anuncio de abertura.
+ *
+ * Funcao pura, separada do envio pelo mesmo motivo de `mensagemAvisoAbertura`
+ * e `mensagemQualidade`: da pra ler o texto final (ver
+ * src/dev/previa-textos.ts) sem mexer no banco nem mandar nada pro grupo.
+ */
+export function mensagemAberturaFixos(partida: {
+  data_jogo: string;
+  vagas_total: number;
+  vagas_goleiro: number;
+}): string {
+  return [
+    `⚽ ${config.RACHA_NOME}${config.RACHA_LOCAL ? ` — ${config.RACHA_LOCAL}` : ''}`,
+    `📅 ${rotuloData(partida.data_jogo)}, ${config.RACHA_HORARIO}`,
+    ...(config.RACHA_ENDERECO ? [`📍 ${config.RACHA_ENDERECO}`] : []),
+    '',
+    `Lista aberta! ${partida.vagas_total} vagas de linha.`,
+    '🪑 Passou das vagas, ninguém fica de fora: entra na RESERVA, na ordem — e sobe automaticamente se alguém sair.',
+    `🧤 Goleiro (até ${partida.vagas_goleiro}) é convidado de quem já confirmou, ou contratado por fora — lista à parte.`,
+    '',
+    'Responda na enquete abaixo 👇',
+  ].join('\n');
+}
+
+/**
  * O anuncio de abertura, separado da criacao da partida para poder ser
  * disparado sozinho (ver src/dev/simular-abertura.ts).
  */
@@ -60,20 +85,7 @@ export async function anunciarAberturaFixos(
   log: Log,
   partida: { data_jogo: string; vagas_total: number; vagas_goleiro: number },
 ): Promise<void> {
-  await anunciar(
-    log,
-    [
-      `⚽ ${config.RACHA_NOME}${config.RACHA_LOCAL ? ` — ${config.RACHA_LOCAL}` : ''}`,
-      `📅 ${rotuloData(partida.data_jogo)}, ${config.RACHA_HORARIO}`,
-      ...(config.RACHA_ENDERECO ? [`📍 ${config.RACHA_ENDERECO}`] : []),
-      '',
-      `Lista aberta! ${partida.vagas_total} vagas de linha.`,
-      '🪑 Passou das vagas, ninguém fica de fora: entra na RESERVA, na ordem — e sobe automaticamente se alguém sair.',
-      `🧤 Goleiro (até ${partida.vagas_goleiro}) é convidado de quem já confirmou, ou contratado por fora — lista à parte.`,
-      '',
-      'Responda na enquete abaixo 👇',
-    ].join('\n'),
-  );
+  await anunciar(log, mensagemAberturaFixos(partida));
 }
 
 /**
