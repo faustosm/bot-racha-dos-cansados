@@ -1,0 +1,459 @@
+<!doctype html>
+<!--
+  GERADO - nao edite neste repo.
+
+  Fonte: faustosm/bot-racha-dos-cansados, em site/. O conteudo desta pagina e
+  do bot (a regra que ela descreve vive em bot/src/domain/), entao ela muda no
+  mesmo commit que a regra e chega aqui por `make publicar-site`.
+
+  Editar direto aqui funciona ate a proxima publicacao, que sobrescreve.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#020617">
+<meta name="robots" content="noindex">
+<title>Regras do Racha</title>
+<link rel="icon" href="/icon-192.png">
+<script src="/theme-init.js"></script>
+<style>
+  @font-face {
+    font-family: 'Oswald';
+    font-style: normal;
+    font-weight: 200 700;
+    font-display: swap;
+    src: url('/fonts/oswald-latin.woff2') format('woff2');
+  }
+
+  :root {
+    color-scheme: dark;
+    --bg: #020617;
+    --surface: #0f172a;
+    --surface-2: #1e293b;
+    --border: #1e293b;
+    --border-soft: #172033;
+    --ink: #ffffff;
+    --ink-2: #f1f5f9;
+    --ink-muted: #94a3b8;
+    --ink-faint: #64748b;
+    --accent: #fbbf24;
+
+    --s-fixo: #199e70;
+    --s-convidado: #d95926;
+    --s-goleiro: #3987e5;
+    --dot-off: #26374f;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 34px -20px rgba(0, 0, 0, 0.75);
+  }
+
+  [data-theme='light'] {
+    color-scheme: light;
+    --bg: #eef2f7;
+    --surface: #ffffff;
+    --surface-2: #eef2f7;
+    --border: #e2e8f0;
+    --border-soft: #e8edf3;
+    --ink: #0f172a;
+    --ink-2: #1e293b;
+    --ink-muted: #52627a;
+    --ink-faint: #6b7c93;
+    --accent: #b45309;
+
+    --s-fixo: #1baf7a;
+    --s-convidado: #eb6834;
+    --s-goleiro: #2a78d6;
+    --dot-off: #d3dbe6;
+
+    --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 26px -16px rgba(15, 23, 42, 0.22);
+  }
+
+  /* Visitante sem tema carimbado que esteja no claro do sistema. O :not()
+     garante que um carimbo explicito sempre vence. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']) {
+      color-scheme: light;
+      --bg: #eef2f7;
+      --surface: #ffffff;
+      --surface-2: #eef2f7;
+      --border: #e2e8f0;
+      --border-soft: #e8edf3;
+      --ink: #0f172a;
+      --ink-2: #1e293b;
+      --ink-muted: #52627a;
+      --ink-faint: #6b7c93;
+      --accent: #b45309;
+
+      --s-fixo: #1baf7a;
+      --s-convidado: #eb6834;
+      --s-goleiro: #2a78d6;
+      --dot-off: #d3dbe6;
+
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 26px -16px rgba(15, 23, 42, 0.22);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink-2);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding-block: 0 64px;
+    padding-inline: 20px;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.55;
+  }
+
+  .wrap { max-width: 860px; margin: 0 auto; }
+
+  a { color: inherit; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+  /* ---------- header ---------- */
+  header { padding: 34px 0 6px; }
+  .voltar {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--ink-muted); text-decoration: none; margin-bottom: 16px;
+  }
+  .voltar:hover { color: var(--ink-2); }
+  .eyebrow {
+    font-family: "Oswald", -apple-system, sans-serif;
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 6px;
+  }
+  h1 {
+    font-family: "Oswald", -apple-system, sans-serif;
+    font-weight: 700; color: var(--ink);
+    font-size: clamp(32px, 6vw, 46px); letter-spacing: 0.005em;
+    text-transform: uppercase; text-wrap: balance;
+    margin: 0 0 10px; line-height: 1;
+  }
+  header p { color: var(--ink-muted); font-size: 14.5px; max-width: 62ch; margin: 0; }
+
+  /* ---------- kpi ---------- */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 26px 0 22px;
+          background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .kpi { background: var(--surface); padding: 16px 18px 18px; }
+  .kpi-value { font-size: 30px; font-weight: 650; color: var(--ink); line-height: 1.05; letter-spacing: -0.015em; margin-bottom: 7px; }
+  .kpi-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+  .kpi-note { font-size: 11.5px; color: var(--ink-faint); margin-top: 3px; line-height: 1.35; }
+
+  /* ---------- indice ---------- */
+  nav.indice { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 26px; }
+  nav.indice a {
+    font-size: 12.5px; text-decoration: none; color: var(--ink-muted);
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: 999px; padding: 5px 12px;
+  }
+  nav.indice a:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+  /* ---------- cards ---------- */
+  .stack { display: flex; flex-direction: column; gap: 16px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 22px; box-shadow: var(--shadow); scroll-margin-top: 16px;
+  }
+  .card h2 {
+    font-family: "Oswald", -apple-system, sans-serif;
+    font-size: 17px; font-weight: 600; letter-spacing: 0.045em; text-transform: uppercase;
+    margin: 0; color: var(--ink);
+  }
+  .card .sub { font-size: 12.5px; color: var(--ink-faint); margin: 5px 0 0; }
+  .card-head { margin-bottom: 18px; }
+
+  /* ---------- regras ---------- */
+  .regras { list-style: none; margin: 0; padding: 0; }
+  .regras > li {
+    padding: 11px 0; border-bottom: 1px solid var(--border-soft);
+    font-size: 14px; color: var(--ink-2);
+  }
+  .regras > li:last-child { border-bottom: none; }
+  .regras > li:first-child { padding-top: 0; }
+  .regras b { color: var(--ink); font-weight: 650; }
+  /* ---------- linha do tempo ---------- */
+  .tl { list-style: none; margin: 0; padding: 0 0 0 22px; position: relative; }
+  .tl::before { content: ""; position: absolute; left: 4px; top: 6px; bottom: 6px; width: 1px; background: var(--border); }
+  .tl > li { position: relative; padding: 0 0 18px; }
+  .tl > li:last-child { padding-bottom: 0; }
+  .tl > li::before {
+    content: ""; position: absolute; left: -22px; top: 6px;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--s-fixo); box-shadow: 0 0 0 3px var(--surface);
+  }
+  .tl > li.silencio::before { background: var(--dot-off); }
+  .tl-quando {
+    font-family: "Oswald", -apple-system, sans-serif;
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); display: block; margin-bottom: 1px;
+  }
+  .tl-o-que { font-size: 14px; color: var(--ink-2); }
+  .tl-o-que b { color: var(--ink); font-weight: 650; }
+  .tl-detalhe { display: block; font-size: 12.5px; color: var(--ink-faint); margin-top: 2px; }
+
+  /* ---------- blocos auxiliares ---------- */
+  .bloco-titulo {
+    font-size: 12px; font-weight: 700; color: var(--ink-2); letter-spacing: 0.06em;
+    text-transform: uppercase; margin: 22px 0 8px;
+  }
+  .bloco-titulo:first-child { margin-top: 0; }
+
+  .msg {
+    background: var(--surface-2); border: 1px solid var(--border-soft); border-radius: 10px;
+    padding: 12px 14px; font-size: 13px; color: var(--ink-2);
+    white-space: pre-wrap; margin: 0 0 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 4px; }
+  .chip {
+    display: inline-block; font-size: 12px; color: var(--ink-2);
+    border: 1px solid var(--border); background: var(--surface-2);
+    border-radius: 999px; padding: 3px 10px;
+  }
+  .chip.gol { border-color: var(--s-goleiro); }
+  .chip.conv { border-color: var(--s-convidado); }
+  .chip.fix { border-color: var(--s-fixo); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  th { color: var(--ink-faint); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  tbody tr:last-child td { border-bottom: none; }
+  td b { color: var(--ink); font-weight: 650; }
+  .tbl-wrap { overflow-x: auto; }
+
+  footer { text-align: center; font-size: 12px; color: var(--ink-faint); margin-top: 30px; line-height: 1.7; }
+  footer a { color: var(--ink-muted); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  }
+
+  @media (max-width: 760px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <a class="voltar" href="/">← Racha dos Cansados</a>
+    <p class="eyebrow">Como entrar no racha</p>
+    <h1>Regras da lista</h1>
+    <p>Quando a lista abre, quantas vagas tem, como se confirma e o que acontece
+    quando ela lota. É só isso que você precisa saber pra jogar sábado.</p>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-value">18</div>
+      <div class="kpi-label">Vagas de linha</div>
+      <div class="kpi-note">Por ordem de confirmação</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">🪑</div>
+      <div class="kpi-label">Reserva sem limite</div>
+      <div class="kpi-note">Passou das 18, entra na fila</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">2</div>
+      <div class="kpi-label">Vagas de goleiro</div>
+      <div class="kpi-note">Lista à parte, fora das 18</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">12h</div>
+      <div class="kpi-label">Quarta, a lista abre</div>
+      <div class="kpi-note">Fecha sábado às 07:00</div>
+    </div>
+  </div>
+
+  <nav class="indice">
+    <a href="#semana">A semana</a>
+    <a href="#entrar">Como entrar</a>
+    <a href="#vagas">Vagas e reserva</a>
+    <a href="#convidados">Convidados</a>
+    <a href="#goleiros">Goleiros</a>
+    <a href="#sair">Sair da lista</a>
+  </nav>
+
+  <div class="stack">
+
+    <!-- ================= A SEMANA ================= -->
+    <section class="card" id="semana">
+      <div class="card-head">
+        <h2>A semana do racha</h2>
+        <p class="sub">Jogo sábado, 09:00 às 11:00, na Toca do Coelho.</p>
+      </div>
+
+      <ul class="tl">
+        <li>
+          <span class="tl-quando">Quarta · 12:00</span>
+          <span class="tl-o-que"><b>A lista abre.</b> A enquete sai no grupo — é só tocar em "✅ Vou".
+          <span class="tl-detalhe">Os 18 primeiros a confirmar são os convocados. Do 19º em diante, reserva.</span></span>
+        </li>
+        <li>
+          <span class="tl-quando">Quinta · 12:00</span>
+          <span class="tl-o-que"><b>Convidados liberados</b> — tendo vaga ou não.
+          <span class="tl-detalhe">Daqui pra frente a fila é uma só: fixo e convidado entram na ordem de chegada. Quem chegou antes está na frente.</span></span>
+        </li>
+        <li>
+          <span class="tl-quando">Quarta a sexta · 19:00</span>
+          <span class="tl-o-que"><b>A lista do dia vai pro grupo</b>, com os convocados, a reserva e os goleiros.</span>
+        </li>
+        <li>
+          <span class="tl-quando">Sexta · 08:00</span>
+          <span class="tl-o-que"><b>Chamada geral</b>, se ainda faltar gente pro jogo acontecer (mínimo de 12 na linha, 6 de cada lado).</span>
+        </li>
+        <li>
+          <span class="tl-quando">Sábado · 07:00</span>
+          <span class="tl-o-que"><b>A lista fecha</b> e a versão final vai pro grupo. Daí em diante ninguém entra nem sai.
+          <span class="tl-detalhe">Duas horas antes da bola rolar, pra dar tempo de completar time ou cancelar.</span></span>
+        </li>
+      </ul>
+    </section>
+
+    <!-- ================= COMO ENTRAR ================= -->
+    <section class="card" id="entrar">
+      <div class="card-head">
+        <h2>Como entrar</h2>
+        <p class="sub">Um toque na enquete do grupo resolve.</p>
+      </div>
+
+      <div class="chips">
+        <span class="chip fix">✅ Vou</span>
+        <span class="chip conv">👥 Vou com convidado</span>
+        <span class="chip">❌ Não vou</span>
+      </div>
+
+      <ul class="regras">
+        <li><b>"✅ Vou"</b> confirma sua presença como jogador de linha. Se as 18 vagas já estiverem ocupadas, você entra na reserva — ninguém fica de fora.</li>
+        <li><b>"👥 Vou com convidado"</b> confirma você e faz o bot te chamar no privado pra pedir o nome de quem vai junto.</li>
+        <li><b>"❌ Não vou"</b> tira você da lista.</li>
+        <li><b>Vale a ordem de confirmação</b> — quem marca primeiro fica em cima na lista, e é essa ordem que decide os 18.</li>
+        <li><b>Dá pra fazer tudo pelo privado do bot também:</b> "vou", "fora", "lista", "ajuda".</li>
+        <li><b>Sem o celular na mão?</b> Pede pra quem organiza te inscrever — a lista é a mesma e a ordem também.</li>
+        <li><b>Desmarcar a enquete não é o mesmo que sair.</b> Pra sair, marque "❌ Não vou".</li>
+        <li><b>Cuidado com a enquete velha:</b> só vale a da semana. Votando numa antiga, o bot avisa você no privado.</li>
+      </ul>
+    </section>
+
+    <!-- ================= VAGAS E RESERVA ================= -->
+    <section class="card" id="vagas">
+      <div class="card-head">
+        <h2>Vagas e reserva</h2>
+        <p class="sub">18 jogam. Quem vier depois espera na fila — e a fila anda.</p>
+      </div>
+
+      <ul class="regras">
+        <li><b>São 18 vagas de linha.</b> Goleiro tem lista própria e não ocupa nenhuma delas.</li>
+        <li><b>Passou das 18, você entra na reserva</b>, na ordem em que confirmou. O grupo vê: "Fulano entrou na reserva (1º da fila)".</li>
+        <li><b>Saiu alguém dos 18, o primeiro da reserva entra na hora</b> — sozinho, sem precisar marcar de novo. O bot publica a lista atualizada e te avisa no privado.</li>
+        <li><b>Isso vale a semana toda</b>, até a lista fechar no sábado de manhã. Desistência de sexta à noite também puxa a reserva.</li>
+        <li><b>Quem sai levando convidado libera mais de uma vaga</b> — e sobe mais de um da fila.</li>
+        <li><b>Na reserva você também traz convidado:</b> ele entra na fila logo atrás de você, e os dois sobem na ordem.</li>
+        <li><b>A fila não tem teto.</b> Ninguém é recusado por falta de vaga — nem fixo, nem convidado.</li>
+      </ul>
+
+      <div class="bloco-titulo">Como a lista aparece no grupo</div>
+      <p class="msg">⚽ Racha dos Cansados — sábado 26/09 · 18/18 (+2 na reserva)
+
+ 1. Fausto — fixo
+ 2. Alexson — fixo
+    (…)
+18. Diego — fixo
+
+🪑 Reserva (entra na ordem, se alguém sair):
+19. Murilo — fixo
+20. Pedrinho — convidado de Fausto
+
+18/18 de linha e 2 na reserva.
+🧤 Goleiros: Zé Goleiro (contratado), Lucas (convidado de Alexson).</p>
+
+      <div class="bloco-titulo">E quando abre vaga</div>
+      <p class="msg">❌ Diego não vai mais. Liberou vaga!
+✅ Murilo entrou no lugar, direto da reserva!</p>
+    </section>
+
+    <!-- ================= CONVIDADOS ================= -->
+    <section class="card" id="convidados">
+      <div class="card-head">
+        <h2>Convidados</h2>
+        <p class="sub">A partir de quinta ao meio-dia, um por pessoa. Até lá a lista é dos fixos.</p>
+      </div>
+
+      <ul class="regras">
+        <li><b>Você precisa estar confirmado</b> pra trazer alguém.</li>
+        <li><b>Marque "👥 Vou com convidado"</b> na enquete: o bot te chama no privado e pergunta o nome.</li>
+        <li><b>Um convidado por pessoa.</b> Se o seu sair, você pode chamar outro.</li>
+        <li><b>Ele entra na mesma fila que todo mundo</b>, pela ordem de chegada: tendo vaga entre os 18, joga; se não, fica na reserva e sobe igual a qualquer um.</li>
+        <li><b>Depois de quinta ao meio-dia, fixo não passa na frente de convidado.</b> A vantagem do fixo é a janela de quarta 12:00 a quinta 12:00, com a lista só pra ele.</li>
+        <li><b>Convidado entra na hora</b> e o grupo vê na mesma hora, com a lista atualizada. O bot te diz se ele ficou entre os 18 ou na reserva.</li>
+        <li><b>Se ele subir da reserva, quem recebe o aviso é você</b> — é você que vai levá-lo no sábado.</li>
+        <li><b>Pra tirar, é só falar no privado:</b> "João não vai mais".</li>
+        <li><b>Quem vem 3 vezes como convidado vira fixo.</b></li>
+      </ul>
+    </section>
+
+    <!-- ================= GOLEIROS ================= -->
+    <section class="card" id="goleiros">
+      <div class="card-head">
+        <h2>Goleiros</h2>
+        <p class="sub">Até 2, em lista própria, e podem ser fechados desde quarta.</p>
+      </div>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Tipo</th><th>O que é</th><th>Precisa de quê</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>Contratado</b></td>
+              <td>Fechado por fora, pago.</td>
+              <td>Nada — quem avisou nem precisa estar na lista.</td>
+            </tr>
+            <tr>
+              <td><b>Convidado</b></td>
+              <td>Goleiro que alguém traz.</td>
+              <td>Quem trouxe precisa estar confirmado.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <ul class="regras" style="margin-top:16px">
+        <li><b>É só falar no privado do bot:</b> "contratei um goleiro" ou "chamei um goleiro". Ele pergunta o nome.</li>
+        <li><b>Goleiro não espera quinta</b> e nunca ocupa uma das 18 vagas de linha.</li>
+      </ul>
+    </section>
+
+    <!-- ================= SAIR ================= -->
+    <section class="card" id="sair">
+      <div class="card-head">
+        <h2>Sair da lista</h2>
+        <p class="sub">Não vai dar? Avise cedo — tem gente esperando a vaga.</p>
+      </div>
+
+      <ul class="regras">
+        <li><b>Marque "❌ Não vou"</b> na enquete, ou mande "não vou mais" no privado do bot.</li>
+        <li><b>Seus convidados saem junto</b> — o bot pergunta se algum vai mesmo assim.</li>
+        <li><b>A vaga vai pro primeiro da reserva na hora</b>, e o grupo é avisado.</li>
+        <li><b>Saindo da reserva, nada muda pro grupo</b> — você só sai da fila.</li>
+        <li><b>Depois de sábado 07:00 não dá mais:</b> a lista está fechada e o time já foi montado com ela.</li>
+      </ul>
+    </section>
+
+  </div>
+
+  <footer>
+    Regras da lista do Racha dos Cansados · atualizado em 21/09/2026<br>
+    <a href="/estatistica/">Ver as estatísticas do racha →</a>
+  </footer>
+</div>
+</body>
+</html>

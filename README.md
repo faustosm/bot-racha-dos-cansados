@@ -123,9 +123,42 @@ make setup           cria instância + registra webhook
 make qr              QR code para parear
 make state           estado da conexão com o WhatsApp
 make backup          backup do Postgres + sessão do WhatsApp
+make publicar-site   publica site/ (/regras e /estatistica) no repo do site
 make reset-instance  troca o número pareado
 make nuke            apaga tudo, inclusive volumes
 ```
+
+## As páginas do site que moram aqui
+
+`site/` guarda as duas páginas de rachadoscansados.com.br que são deste
+projeto:
+
+```
+site/regras/index.html          → rachadoscansados.com.br/regras/
+site/estatistica/index.html     → rachadoscansados.com.br/estatistica/
+site/estatistica/estatistica.js
+```
+
+Elas moram aqui porque o **conteúdo** é daqui: a `/regras` descreve o que
+`bot/src/domain/lista.ts` e `inscricao.ts` fazem, e a `/estatistica` desenha o
+que `domain/estatisticas.ts` calcula. Mudou a regra, a página muda no mesmo
+commit — ficando no outro repo, ela envelhecia sozinha.
+
+Quem **serve** continua sendo o site: `rachadoscansados.com.br` é um Worker só,
+ligado ao repo `faustosm/rachadoscansados`, e as duas páginas usam assets da
+raiz dele (`/theme-init.js`, `/icon-192.png`) e linkam pro app. Por isso elas
+são **publicadas** lá, não movidas:
+
+```
+make publicar-site
+```
+
+O comando compara arquivo a arquivo e só commita o que mudou (mesmo cuidado do
+`estatisticas.json`: publicar idêntico geraria build no Cloudflare à toa). No
+repo do site essas pastas são geradas e trazem um aviso no topo — quem edita,
+edita aqui.
+
+Precisa do `GITHUB_TOKEN` no `.env`, o mesmo das estatísticas.
 
 ## Sobre o número do bot
 
