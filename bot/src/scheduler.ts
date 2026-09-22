@@ -71,6 +71,7 @@ export function mensagemAberturaFixos(partida: {
     '',
     `Lista aberta! ${partida.vagas_total} vagas de linha.`,
     '🪑 Passou das vagas, ninguém fica de fora: entra na RESERVA, na ordem — e sobe automaticamente se alguém sair.',
+    '👥 Convidado (1 por pessoa) libera quinta ao meio-dia e entra na mesma fila, pela ordem de chegada.',
     `🧤 Goleiro (até ${partida.vagas_goleiro}) é convidado de quem já confirmou, ou contratado por fora — lista à parte.`,
     '',
     'Responda na enquete abaixo 👇',

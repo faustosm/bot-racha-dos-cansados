@@ -16,11 +16,10 @@ export interface Vagas {
  * Conta so os jogadores de LINHA - goleiro tem teto e contagem propria
  * (`motivoRecusaGoleiro`, `listarGoleiros`) e nunca ocupa vaga da linha.
  *
- * A lista de linha aceita mais gente do que as vagas (decisao de 21/09/2026):
- * fixo nunca e recusado, so passa a ser RESERVA. Por isso `ocupadas` nao e
- * `itens.length` - ela para no teto, e o excedente vira `reservas`. Quem chama
- * para decidir se cabe mais alguem (convidado) continua olhando `livres`, que
- * e zero enquanto houver fila: a vaga que abrir e de quem esta esperando.
+ * A lista de linha aceita mais gente do que as vagas (decisao de 21/09/2026,
+ * estendida a convidados em 22/09/2026): ninguem e recusado por falta de vaga,
+ * so passa a ser RESERVA. Por isso `ocupadas` nao e `itens.length` - ela para
+ * no teto, e o excedente vira `reservas`.
  */
 export function contarVagas(
   itens: readonly ItemLista[],
@@ -34,7 +33,14 @@ export function contarVagas(
   };
 }
 
-/** Ha vaga para mais alguem? Com fila de espera, nao ha. */
+/**
+ * Entra direto entre os convocados, ou vai pra reserva? Com fila de espera,
+ * vai pra reserva.
+ *
+ * Nao decide mais QUEM PODE entrar - desde 22/09/2026 ninguem e barrado por
+ * falta de vaga. Serve so para escolher o texto: "confirmado" ou "voce ficou
+ * na reserva".
+ */
 export function cabeMais(vagas: Vagas): boolean {
   return vagas.livres > 0;
 }
@@ -56,28 +62,82 @@ export function separarFila(
 }
 
 /**
- * Por que esse CONVIDADO nao pode entrar, se nao puder.
+ * Por que esse CONVIDADO de linha nao pode entrar, se nao puder.
  *
- * Vale so para convidado: fixo entra sempre (vira reserva se as vagas ja
- * acabaram). `ocupadas` e o total de gente na linha, fila inclusa - e por isso
- * que um convidado e recusado enquanto houver reserva esperando: a proxima
- * vaga ja tem dono.
+ * Desde 22/09/2026 nao e mais falta de vaga: convidado entra na fila como
+ * qualquer um, pela ordem de chegada. O unico limite e quantos cada fixo pode
+ * trazer (MAX_CONVIDADOS_POR_FIXO).
+ *
+ * A troca de criterio foi deliberada: os fixos tem de quarta 12:00 a quinta
+ * 12:00 com a lista so pra eles, entao um fixo que marca depois disso nao tem
+ * preferencia sobre um convidado que ja estava na fila. O que precisa de freio
+ * e o volume por padrinho - sem teto de vagas, um fixo sozinho empurraria a
+ * fila inteira pra tras.
  */
-export function motivoDaRecusa(
-  ocupadas: number,
-  partida: Pick<Partida, 'vagas_total'>,
-  quantas: number,
+export function motivoRecusaConvidado(
+  jaTem: number,
+  max: number,
 ): string | undefined {
-  const livres = partida.vagas_total - ocupadas;
-  if (quantas <= livres) return undefined;
-  if (livres > 0) {
-    return `Só resta${livres === 1 ? '' : 'm'} ${livres} vaga${livres === 1 ? '' : 's'}.`;
+  if (jaTem < max) return undefined;
+  return max === 1
+    ? 'Cada pessoa pode levar 1 convidado, e você já tem o seu nesta partida.'
+    : `Cada pessoa pode levar ${max} convidados, e você já tem ${jaTem} nesta partida.`;
+}
+
+/** "A", "A e B", "A, B e C" - para citar nomes numa frase. */
+function juntarNomes(nomes: readonly string[]): string {
+  if (nomes.length <= 1) return nomes[0] ?? '';
+  return `${nomes.slice(0, -1).join(', ')} e ${nomes[nomes.length - 1]}`;
+}
+
+/**
+ * O aviso no privado de quem subiu da reserva.
+ *
+ * Uma mensagem por PESSOA, nao por promocao: quando um fixo sobe junto com o
+ * convidado dele, os dois avisos iam separados e ele recebia duas mensagens
+ * seguidas dizendo quase a mesma coisa (22/09/2026).
+ *
+ * O convidado nao tem WhatsApp cadastrado, entao quem recebe o aviso dele e
+ * sempre o padrinho - e por isso que as frases falam "seu convidado" em vez de
+ * se dirigir a ele.
+ */
+export function textoDePromocao(
+  quem: { eu: boolean; convidados: readonly string[] },
+  quando: string,
+): string[] {
+  const nomes = juntarNomes(quem.convidados);
+  const primeiro = quem.convidados[0] ?? '';
+  const comoSair = (frase: string): string =>
+    `${frase} que eu passo a vaga pro próximo.`;
+
+  if (quem.eu && quem.convidados.length) {
+    return [
+      `🎉 Abriu vaga! Você e ${nomes} estavam na reserva do racha de ${quando} e agora estão escalados.`,
+      '',
+      comoSair(
+        `Se alguém não for mais, me avisa ("não vou mais", ou "${primeiro} não vai mais")`,
+      ),
+    ];
   }
-  const naFila = ocupadas - partida.vagas_total;
-  const completa = `A lista está completa (${partida.vagas_total} jogadores de linha).`;
-  return naFila > 0
-    ? `${completa} Tem ${naFila} ${naFila === 1 ? 'pessoa' : 'pessoas'} na reserva na frente — a próxima vaga é de quem está esperando.`
-    : completa;
+  if (quem.eu) {
+    return [
+      `🎉 Abriu vaga e você entrou! Estava na reserva do racha de ${quando} e agora está escalado.`,
+      '',
+      comoSair('Se não der mais, responde "não vou mais"'),
+    ];
+  }
+  if (quem.convidados.length > 1) {
+    return [
+      `🎉 Abriu vaga e seus convidados ${nomes} entraram! Estavam na reserva do racha de ${quando} e agora estão escalados.`,
+      '',
+      comoSair(`Se algum não for mais, me avisa ("${primeiro} não vai mais")`),
+    ];
+  }
+  return [
+    `🎉 Abriu vaga e ${primeiro}, seu convidado, entrou! Estava na reserva do racha de ${quando} e agora está escalado.`,
+    '',
+    comoSair(`Se ele não for mais, me avisa ("${primeiro} não vai mais")`),
+  ];
 }
 
 /** Por que um goleiro nao pode entrar, se nao puder. Teto proprio, sem fila. */

@@ -17,7 +17,7 @@ import {
   alertasDeVagas,
   contarVagas,
   formatarLista,
-  motivoDaRecusa,
+  motivoRecusaConvidado,
 } from '../domain/lista.js';
 import { proximoSabado } from '../domain/datas.js';
 import type { ItemLista } from '../domain/tipos.js';
@@ -56,12 +56,15 @@ const cenarios = {
     // pessoas seguidas, e uma lista inteira por reserva viraria mural de bot.
     semLista: true,
   },
-  // Convidado tentando entrar com a fila formada - este sim e recusado, e o
-  // cabecalho sai do MESMO `motivoDaRecusa` que o bot usa de verdade.
+  // Convidado recusado - nao mais por falta de vaga (com a fila formada ele
+  // entra na reserva como qualquer um), e sim por ja ter usado a cota do
+  // padrinho. O cabecalho sai do MESMO `motivoRecusaConvidado` que o bot usa.
   recusado: {
     cabecalho: (() => {
-      const partida = { vagas_total: config.VAGAS_TOTAL };
-      const motivo = motivoDaRecusa(config.VAGAS_TOTAL + 2, partida, 1);
+      const motivo = motivoRecusaConvidado(
+        config.MAX_CONVIDADOS_POR_FIXO,
+        config.MAX_CONVIDADOS_POR_FIXO,
+      );
       return `⚠️ Rafael: ${motivo}`;
     })(),
     itens: jogadores(config.VAGAS_TOTAL + 2),

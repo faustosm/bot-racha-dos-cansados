@@ -5,8 +5,9 @@ import {
   cabeMais,
   contarVagas,
   formatarLista,
-  motivoDaRecusa,
+  motivoRecusaConvidado,
   separarFila,
+  textoDePromocao,
 } from './lista.js';
 import type { ItemLista } from './tipos.js';
 
@@ -87,7 +88,8 @@ describe('alertasDeVagas', () => {
 });
 
 // Fila de espera (21/09/2026): fixo nunca e recusado - passando das vagas ele
-// vira reserva, e a proxima vaga que abrir e dele, nao de um convidado novo.
+// vira reserva. Desde 22/09/2026 o convidado entra na mesma fila, pela ordem
+// de chegada, e nao ha mais recusa por falta de vaga.
 describe('fila de reserva', () => {
   const itens = (quantos: number) =>
     Array.from({ length: quantos }, (_, i) => fixoSimples(i + 1));
@@ -99,7 +101,7 @@ describe('fila de reserva', () => {
     assert.equal(v.livres, 0);
   });
 
-  it('com fila nao cabe convidado: a vaga que abrir e de quem espera', () => {
+  it('com fila, quem entra vai pra reserva em vez de ser convocado', () => {
     assert.equal(cabeMais(contarVagas(itens(19), 18)), false);
     assert.equal(cabeMais(contarVagas(itens(17), 18)), true);
   });
@@ -127,30 +129,34 @@ describe('fila de reserva', () => {
   });
 });
 
-describe('motivoDaRecusa', () => {
-  const p = { vagas_total: 18 };
-
-  it('com gente na reserva, explica que a vaga ja tem dono', () => {
-    const m = motivoDaRecusa(20, p, 1) ?? '';
-    assert.match(m, /2 pessoas na reserva/);
-    assert.match(m, /próxima vaga é de quem está esperando/);
+// 22/09/2026: convidado deixou de ser recusado por falta de vaga. A janela de
+// quarta 12:00 a quinta 12:00 ja da aos fixos a lista so pra eles - quem marca
+// depois disso nao passa na frente de um convidado que chegou antes. O que
+// sobrou de limite e a cota por padrinho, sem a qual um fixo sozinho empurra a
+// fila inteira pra tras.
+describe('motivoRecusaConvidado', () => {
+  it('nao recusa quem ainda nao usou a cota', () => {
+    assert.equal(motivoRecusaConvidado(0, 1), undefined);
   });
 
-  it('lista cheia recusa e diz que sao 18 de linha', () => {
-    const m = motivoDaRecusa(18, p, 1);
-    assert.match(m ?? '', /lista está completa/i);
-    assert.match(m ?? '', /18 jogadores de linha/i);
+  it('recusa o segundo convidado quando a cota e 1', () => {
+    const m = motivoRecusaConvidado(1, 1) ?? '';
+    assert.match(m, /1 convidado/);
+    assert.match(m, /já tem o seu/i);
     // Recusa de linha e sobre linha: nao pode confundir com o teto de gol,
     // que e separado (motivoRecusaGoleiro).
-    assert.doesNotMatch(m ?? '', /goleiro/i);
+    assert.doesNotMatch(m, /goleiro/i);
   });
 
-  it('com folga nao recusa ninguem', () => {
-    assert.equal(motivoDaRecusa(5, p, 1), undefined);
+  it('com cota maior, diz quantos a pessoa ja tem', () => {
+    const m = motivoRecusaConvidado(2, 2) ?? '';
+    assert.match(m, /2 convidados/);
+    assert.match(m, /já tem 2/);
   });
 
-  it('recusa quando faltam vagas para todos os convidados', () => {
-    assert.match(motivoDaRecusa(17, p, 2) ?? '', /Só resta 1 vaga/i);
+  it('nao fala de vaga nem de lista cheia - nao e mais esse o criterio', () => {
+    const m = motivoRecusaConvidado(1, 1) ?? '';
+    assert.doesNotMatch(m, /vaga|completa|reserva/i);
   });
 });
 
@@ -165,5 +171,56 @@ describe('remoção de convidado por nome', () => {
     assert.ok(iguais('joao', 'João'));
     assert.ok(iguais('  JOÃO ', 'joão'));
     assert.ok(!iguais('João', 'João Silva'));
+  });
+});
+
+// 22/09/2026: o aviso de promocao passou a sair por PESSOA, nao por promocao.
+// Antes, um fixo que subia junto com o convidado dele recebia duas mensagens
+// seguidas dizendo quase a mesma coisa. E o convidado, que nao tem WhatsApp
+// cadastrado, so tinha o anuncio do grupo - quem precisa saber e o padrinho,
+// que vai leva-lo no sabado.
+describe('aviso de quem subiu da reserva', () => {
+  const quando = 'sábado 26/09';
+  const texto = (quem: { eu: boolean; convidados: string[] }) =>
+    textoDePromocao(quem, quando).join('\n');
+
+  it('so o fixo: fala com ele e ensina a sair', () => {
+    const t = texto({ eu: true, convidados: [] });
+    assert.match(t, /você entrou/i);
+    assert.match(t, /"não vou mais"/);
+    assert.doesNotMatch(t, /convidado/i);
+  });
+
+  it('so o convidado: fala com o padrinho, nao com o convidado', () => {
+    const t = texto({ eu: false, convidados: ['Pedrinho'] });
+    assert.match(t, /Pedrinho, seu convidado, entrou/);
+    // Quem le e o padrinho: "voce entrou" aqui seria mentira.
+    assert.doesNotMatch(t, /você entrou/i);
+    assert.match(t, /"Pedrinho não vai mais"/);
+  });
+
+  it('os dois na mesma saida: UMA mensagem, nao duas', () => {
+    const t = texto({ eu: true, convidados: ['Pedrinho'] });
+    assert.match(t, /Você e Pedrinho/);
+    assert.match(t, /agora estão escalados/);
+    // O texto precisa ensinar a tirar qualquer um dos dois.
+    assert.match(t, /"não vou mais"/);
+    assert.match(t, /"Pedrinho não vai mais"/);
+  });
+
+  it('mais de um convidado: cita todos com "e" antes do ultimo', () => {
+    const t = texto({ eu: false, convidados: ['Pedrinho', 'Kaique'] });
+    assert.match(t, /Pedrinho e Kaique entraram/);
+    assert.match(t, /estão escalados/);
+  });
+
+  it('sempre diz de que jogo esta falando', () => {
+    for (const quem of [
+      { eu: true, convidados: [] },
+      { eu: false, convidados: ['Pedrinho'] },
+      { eu: true, convidados: ['Pedrinho'] },
+    ]) {
+      assert.match(texto(quem), /sábado 26\/09/);
+    }
   });
 });

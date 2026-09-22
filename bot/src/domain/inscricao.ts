@@ -1,6 +1,7 @@
 import type { PoolClient } from 'pg';
+import { config } from '../config.js';
 import { query, queryOne, transaction } from '../db.js';
-import { motivoDaRecusa, motivoRecusaGoleiro } from './lista.js';
+import { motivoRecusaConvidado, motivoRecusaGoleiro } from './lista.js';
 import { erro, ok } from './tipos.js';
 import type {
   ItemGoleiro,
@@ -21,6 +22,12 @@ export interface Promovido {
   readonly nome: string;
   /** Id do jogador quando e um fixo; convidado nao tem cadastro proprio. */
   readonly jogadorId: number | null;
+  /**
+   * Quem trouxe, quando e convidado. E por ele que o aviso de promocao sai:
+   * convidado nao tem WhatsApp cadastrado, entao quem precisa saber que a
+   * vaga saiu e o padrinho, que vai leva-lo no sabado.
+   */
+  readonly convidadoDeId: number | null;
 }
 
 interface LinhaLista {
@@ -220,21 +227,52 @@ async function contarComLock(
  * dos pontos por esquecimento.
  *
  * Desde 21/09/2026 a linha nao tem teto para FIXO: passando das vagas ele
- * entra na reserva, em vez de ser recusado. Convidado continua limitado - e
- * limitado pela fila inteira, nao so pelas vagas (`motivoDaRecusa` conta a
- * reserva): a proxima vaga e de quem ja esta esperando.
+ * entra na reserva, em vez de ser recusado. Desde 22/09/2026 o CONVIDADO
+ * tambem entra na reserva - a lista de linha nao recusa mais ninguem por falta
+ * de vaga, so ordena por chegada (ver `motivoRecusaConvidado`).
+ *
+ * O que ainda barra convidado e o volume por padrinho, e so ele. Goleiro segue
+ * com teto proprio, que nao mudou.
  */
 function motivoDeCapacidade(
   contagem: { linha: number; gols: number },
   partida: Partida,
   posicao: Posicao,
   tipo: TipoInscricao,
+  /** Convidados de linha que o anfitriao ja tem nesta partida. */
+  convidadosDoAnfitriao = 0,
 ): string | undefined {
   if (posicao === 'gol') {
     return motivoRecusaGoleiro(contagem.gols, partida.vagas_goleiro);
   }
   if (tipo === 'fixo') return undefined;
-  return motivoDaRecusa(contagem.linha, partida, 1);
+  return motivoRecusaConvidado(
+    convidadosDoAnfitriao,
+    config.MAX_CONVIDADOS_POR_FIXO,
+  );
+}
+
+/**
+ * Quantos convidados de LINHA esse fixo ja tem nesta partida.
+ *
+ * Conta dentro da transacao que ja travou a partida (`contarComLock`): duas
+ * mensagens com um nome cada, chegando juntas, veriam a mesma contagem antiga
+ * e as duas passariam pelo limite.
+ */
+async function contarConvidadosDoAnfitriao(
+  client: PoolClient,
+  partidaId: number,
+  anfitriaoId: number,
+): Promise<number> {
+  const { rows } = await client.query<{ n: string }>(
+    `select count(*)::text as n from inscricao
+      where partida_id = $1
+        and convidado_de_id = $2
+        and posicao = 'linha'
+        and removido_em is null`,
+    [partidaId, anfitriaoId],
+  );
+  return Number(rows[0]?.n ?? 0);
 }
 
 /**
@@ -271,10 +309,12 @@ async function convocadosDaLinha(
     id: number;
     nome: string;
     jogador_id: number | null;
+    convidado_de_id: number | null;
   }>(
     `select i.id,
             coalesce(j.nome_escolhido, j.nome, i.convidado_nome) as nome,
-            i.jogador_id
+            i.jogador_id,
+            i.convidado_de_id
        from inscricao i
        left join jogador j on j.id = i.jogador_id
       where i.partida_id = $1
@@ -288,6 +328,7 @@ async function convocadosDaLinha(
     inscricaoId: r.id,
     nome: r.nome,
     jogadorId: r.jogador_id,
+    convidadoDeId: r.convidado_de_id,
   }));
 }
 
@@ -568,7 +609,7 @@ export async function adicionarConvidado(
     // verdade - `anfitriaoId` fica so como "quem avisou", nao dono do goleiro.
     contratado?: boolean;
   } = {},
-): Promise<Resultado<ItemLista>> {
+): Promise<Resultado<ConvidadoAdicionado>> {
   return transaction(async (client) => {
     if (opcoes.exigirAnfitriao !== false) {
       const anfitriao = await client.query(
@@ -577,15 +618,25 @@ export async function adicionarConvidado(
         [partida.id, anfitriaoId],
       );
       if (anfitriao.rowCount === 0) {
-        return erro<ItemLista>(
+        return erro<ConvidadoAdicionado>(
           'Confirme sua presença antes de trazer convidado.',
         );
       }
     }
 
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDeCapacidade(contagem, partida, posicao, 'convidado');
-    if (motivo) return erro<ItemLista>(motivo);
+    const jaTem =
+      posicao === 'linha'
+        ? await contarConvidadosDoAnfitriao(client, partida.id, anfitriaoId)
+        : 0;
+    const motivo = motivoDeCapacidade(
+      contagem,
+      partida,
+      posicao,
+      'convidado',
+      jaTem,
+    );
+    if (motivo) return erro<ConvidadoAdicionado>(motivo);
 
     const { rows } = await client.query<{ id: number }>(
       `insert into inscricao
@@ -594,15 +645,35 @@ export async function adicionarConvidado(
        returning id`,
       [partida.id, posicao, nome, anfitriaoId, opcoes.contratado ?? false],
     );
+    const id = rows[0]?.id ?? 0;
+    // Mesma fila do fixo: `filaDe` conta a posicao na ordem de chegada e diz
+    // se ela caiu alem das vagas. Goleiro sempre volta como convocado - teto
+    // rigido, sem reserva.
+    const fila = await filaDe(client, partida, id, posicao);
     return ok({
-      id: rows[0]?.id ?? 0,
+      id,
       nome,
       tipo: 'convidado' as const,
       posicao,
       convidadoDeId: anfitriaoId,
+      reserva: fila.reserva,
+      posicaoNaReserva: fila.posicaoNaReserva,
     });
   });
 }
+
+/**
+ * Onde o convidado caiu ao entrar.
+ *
+ * Desde 22/09/2026 ele pode entrar direto na reserva, entao "adicionado" nao
+ * significa mais "escalado" - e quem chama precisa dizer qual dos dois foi,
+ * senao o padrinho leva o cara no sabado achando que tinha vaga.
+ */
+export type ConvidadoAdicionado = ItemLista & {
+  readonly reserva: boolean;
+  /** 1 = proximo a entrar. Zero quando esta convocado. */
+  readonly posicaoNaReserva: number;
+};
 
 /** Como o pedido de remocao terminou, para quem chama montar a resposta. */
 export type Remocao =
@@ -719,8 +790,9 @@ export async function restaurarInscricao(
     const { rows } = await client.query<{
       convidado_nome: string | null;
       posicao: Posicao;
+      convidado_de_id: number | null;
     }>(
-      `select convidado_nome, posicao from inscricao
+      `select convidado_nome, posicao, convidado_de_id from inscricao
         where id = $1 and partida_id = $2 and removido_em is not null`,
       [inscricaoId, partida.id],
     );
@@ -731,11 +803,26 @@ export async function restaurarInscricao(
       );
     }
 
-    // Convidado, mesmo voltando: nao fura fila. Se a lista de linha ja esta
-    // cheia (com ou sem reserva atras), ele nao volta - a vaga seria de quem
-    // esta esperando.
+    // Voltando, o convidado mantem o lugar que tinha: a restauracao preserva
+    // o `criado_em` de proposito (ver quem chama, em handlers.ts) - ele nao
+    // desistiu, quem saiu foi o anfitriao dele. O que pode barrar a volta e
+    // esse anfitriao ter arranjado outro convidado nesse meio tempo.
     const contagem = await contarComLock(client, partida.id);
-    const motivo = motivoDeCapacidade(contagem, partida, alvo.posicao, 'convidado');
+    const jaTem =
+      alvo.posicao === 'linha' && alvo.convidado_de_id !== null
+        ? await contarConvidadosDoAnfitriao(
+            client,
+            partida.id,
+            alvo.convidado_de_id,
+          )
+        : 0;
+    const motivo = motivoDeCapacidade(
+      contagem,
+      partida,
+      alvo.posicao,
+      'convidado',
+      jaTem,
+    );
     if (motivo) return erro<{ nome: string; posicao: Posicao }>(motivo);
 
     await client.query(

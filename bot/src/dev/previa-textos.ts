@@ -11,7 +11,13 @@ import { config } from '../config.js';
 import { mensagemAberturaFixos } from '../scheduler.js';
 import { tituloDaEnquete, OPCOES } from '../domain/enquete.js';
 import { proximoSabado } from '../domain/datas.js';
-import { alertasDeVagas, contarVagas, formatarLista, rotuloData } from '../domain/lista.js';
+import {
+  alertasDeVagas,
+  contarVagas,
+  formatarLista,
+  rotuloData,
+  textoDePromocao,
+} from '../domain/lista.js';
 import type { ItemGoleiro, ItemLista } from '../domain/tipos.js';
 
 const NOMES = [
@@ -107,16 +113,46 @@ bloco(
   ].join('\n'),
 );
 
-// 5. DM de quem subiu
+// 5. DM de quem subiu - montada pela MESMA funcao que o bot usa.
+const RODAPE_PROMOCAO = '(não quer que eu te chame? responde "não perturbe")';
+const avisoDePromocao = (quem: {
+  eu: boolean;
+  convidados: string[];
+}): string =>
+  [...textoDePromocao(quem, rotuloData(dataJogo)), '', RODAPE_PROMOCAO].join(
+    '\n',
+  );
+
 bloco(
   'PRIVADO DE QUEM SUBIU',
+  avisoDePromocao({ eu: true, convidados: [] }),
+);
+
+// 6. Convidado entrando com a lista ja cheia - o padrinho precisa saber que
+// ele caiu na fila, nao entre os 18 (correcao de 22/09/2026).
+bloco(
+  'CONVIDADO ENTRA COM A LISTA CHEIA — PRIVADO DO PADRINHO',
   [
-    `🎉 Abriu vaga e você entrou! Estava na reserva do racha de ${rotuloData(dataJogo)} e agora está escalado.`,
-    '',
-    'Se não der mais, responde "não vou mais" que eu passo a vaga pro próximo.',
-    '',
-    '(não quer que eu te chame? responde "não perturbe")',
+    'Anotado: Pedrinho 🪑 (reserva, 2º da fila).',
+    'As vagas de linha já estão ocupadas — se alguém sair, ele entra e eu te aviso aqui.',
   ].join('\n'),
+);
+bloco(
+  'CONVIDADO ENTRA COM A LISTA CHEIA — ANÚNCIO NO GRUPO',
+  '👥 Fausto confirmou convidado: Pedrinho 🪑 (reserva, 2º da fila).',
+);
+
+// 7. O convidado sobe: quem recebe o aviso e o PADRINHO, que e quem vai
+// leva-lo no sabado - o convidado nao tem WhatsApp cadastrado.
+bloco(
+  'CONVIDADO SOBE DA RESERVA — PRIVADO DO PADRINHO',
+  avisoDePromocao({ eu: false, convidados: ['Pedrinho'] }),
+);
+
+// 8. Os dois de uma vez (uma saida que liberou duas vagas): UMA mensagem so.
+bloco(
+  'PADRINHO E CONVIDADO SOBEM JUNTOS — UMA MENSAGEM SÓ',
+  avisoDePromocao({ eu: true, convidados: ['Pedrinho'] }),
 );
 
 process.exit(0);
