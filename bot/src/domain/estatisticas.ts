@@ -60,6 +60,25 @@ export interface VolumeConvidado {
   faltamParaFixo: number;
 }
 
+/**
+ * Fixo cadastrado que ainda NAO jogou nenhum racha desde que o bot existe.
+ *
+ * "Jogou" e o mesmo criterio de `PresencaJogador`: convocado (dentro das
+ * vagas) num racha ja fechado. Quem so ficou na reserva, ou so votou, nao
+ * conta como presenca - e justamente essa gente que some das estatisticas
+ * sem este bloco, porque ela nao aparece em `presenca` nem em lugar nenhum.
+ *
+ * So NOME, nunca telefone: este JSON e servido publicamente em
+ * rachadoscansados.com.br/estatisticas.json, e nome ja e o que o resto do
+ * arquivo expoe (`presenca`, `padrinhos`). Telefone nao acrescenta nada ao
+ * acompanhamento e e dado de terceiro numa pagina aberta.
+ */
+export interface JogadorSemPresenca {
+  nome: string;
+  /** Esta inscrito na partida em aberto agora - vai estrear se ela acontecer. */
+  inscritoAgora: boolean;
+}
+
 export interface Estatisticas {
   geradoEm: string;
   totalRachas: number;
@@ -76,6 +95,7 @@ export interface Estatisticas {
   padrinhos: Padrinho[];
   distribuicaoNotas: DistribuicaoNota[];
   volumeConvidados: VolumeConvidado[];
+  nuncaJogaram: JogadorSemPresenca[];
 }
 
 // ── Busca (IO) ───────────────────────────────────────────────────────────
@@ -226,6 +246,45 @@ export interface DadosBrutos {
   distribuicaoNotas: LinhaDistribuicao[];
   aparicoesConvidados: LinhaAparicaoConvidado[];
   jogadoresCadastrados: number;
+  nuncaJogaram: LinhaNuncaJogou[];
+}
+
+/**
+ * Cadastrados que nunca foram convocados num racha fechado.
+ *
+ * O `not exists` repete a janela de `SQL_PRESENCA` de proposito: os dois
+ * precisam concordar sobre o que e "jogou", senao a soma nao fecha com
+ * `jogadoresCadastrados` e o site mostra dois numeros que se contradizem.
+ */
+const SQL_NUNCA_JOGARAM = `
+  select coalesce(j.nome_escolhido, j.nome) as nome,
+         exists (
+           select 1 from inscricao i
+             join partida p on p.id = i.partida_id
+            where i.jogador_id = j.id
+              and i.removido_em is null
+              and p.status <> 'fechada'
+         ) as inscrito_agora
+    from jogador j
+   where coalesce(j.nome_escolhido, j.nome) is not null
+     and not exists (
+       select 1
+         from (select i.partida_id, i.tipo, i.jogador_id,
+                      row_number() over (partition by i.partida_id order by i.criado_em, i.id) as pos
+                 from inscricao i
+                where i.removido_em is null and i.posicao = 'linha') l
+         join partida p on p.id = l.partida_id
+        where l.jogador_id = j.id
+          and l.tipo = 'fixo'
+          and p.status = 'fechada'
+          and l.pos <= p.vagas_total
+     )
+   order by nome
+`;
+
+interface LinhaNuncaJogou {
+  nome: string;
+  inscrito_agora: boolean;
 }
 
 export async function buscarDadosBrutos(): Promise<DadosBrutos> {
@@ -238,6 +297,7 @@ export async function buscarDadosBrutos(): Promise<DadosBrutos> {
     distribuicaoNotas,
     aparicoesConvidados,
     totalJogadores,
+    nuncaJogaram,
   ] = await Promise.all([
     query<LinhaComposicao>(SQL_COMPOSICAO),
     query<LinhaAvaliacao>(SQL_AVALIACAO_POR_PARTIDA),
@@ -247,6 +307,7 @@ export async function buscarDadosBrutos(): Promise<DadosBrutos> {
     query<LinhaDistribuicao>(SQL_DISTRIBUICAO_NOTAS),
     query<LinhaAparicaoConvidado>(SQL_APARICOES_CONVIDADOS),
     query<{ total: string }>('select count(*) as total from jogador'),
+    query<LinhaNuncaJogou>(SQL_NUNCA_JOGARAM),
   ]);
 
   return {
@@ -258,6 +319,7 @@ export async function buscarDadosBrutos(): Promise<DadosBrutos> {
     distribuicaoNotas,
     aparicoesConvidados,
     jogadoresCadastrados: Number(totalJogadores[0]?.total ?? 0),
+    nuncaJogaram,
   };
 }
 
@@ -382,6 +444,10 @@ export function montarEstatisticas(
     padrinhos,
     distribuicaoNotas,
     volumeConvidados,
+    nuncaJogaram: dados.nuncaJogaram.map((l) => ({
+      nome: l.nome,
+      inscritoAgora: l.inscrito_agora,
+    })),
   };
 }
 

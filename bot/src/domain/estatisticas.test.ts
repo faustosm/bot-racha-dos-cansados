@@ -32,6 +32,10 @@ const dadosBase: DadosBrutos = {
     { convidado_nome: 'Diego', data_jogo: '2026-08-15', anfitriao: 'Ana' },
   ],
   jogadoresCadastrados: 10,
+  nuncaJogaram: [
+    { nome: 'Elias', inscrito_agora: false },
+    { nome: 'Fabio', inscrito_agora: true },
+  ],
 };
 
 describe('montarEstatisticas', () => {
@@ -74,6 +78,7 @@ describe('montarEstatisticas', () => {
       distribuicaoNotas: [],
       aparicoesConvidados: [],
       jogadoresCadastrados: 5,
+      nuncaJogaram: [],
     };
     const r = montarEstatisticas(vazio, new Date());
     assert.equal(r.resumo.taxaLotacaoLinha, null);
@@ -113,5 +118,31 @@ describe('montarEstatisticas', () => {
       vezes: 4,
       faltamParaFixo: 0,
     });
+  });
+});
+
+// Quem nunca foi convocado nao aparecia em lugar nenhum das estatisticas:
+// `presenca` so lista quem jogou, e o resumo dava so o numero. Sem a lista,
+// "29 de 38 ja jogaram" nao dizia QUEM sao os outros 9 (22/09/2026).
+describe('nuncaJogaram', () => {
+  it('leva os cadastrados sem nenhuma convocacao, com o nome', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    assert.deepEqual(
+      r.nuncaJogaram.map((j) => j.nome),
+      ['Elias', 'Fabio'],
+    );
+  });
+
+  it('marca quem ja esta inscrito na partida em aberto', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    assert.equal(r.nuncaJogaram[0]?.inscritoAgora, false);
+    assert.equal(r.nuncaJogaram[1]?.inscritoAgora, true);
+  });
+
+  it('nao expoe telefone - o JSON e publico', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    for (const j of r.nuncaJogaram) {
+      assert.deepEqual(Object.keys(j).sort(), ['inscritoAgora', 'nome']);
+    }
   });
 });
