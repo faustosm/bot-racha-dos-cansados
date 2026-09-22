@@ -74,6 +74,7 @@ export interface VolumeConvidado {
  * acompanhamento e e dado de terceiro numa pagina aberta.
  */
 export interface JogadorSemPresenca {
+  /** Ja mascarado quando o cadastro nao tem nome - ver `mascararNome`. */
   nome: string;
   /** Esta inscrito na partida em aberto agora - vai estrear se ela acontecer. */
   inscritoAgora: boolean;
@@ -247,6 +248,21 @@ export interface DadosBrutos {
   aparicoesConvidados: LinhaAparicaoConvidado[];
   jogadoresCadastrados: number;
   nuncaJogaram: LinhaNuncaJogou[];
+}
+
+/**
+ * Quem entra no grupo e nunca fala com o bot nao tem nome: o cadastro guarda
+ * so o telefone, porque e tudo que o WhatsApp entrega de quem nao mandou
+ * mensagem (o nome viaja no pushName, que so vem junto com uma). O fallback
+ * de `server.ts` grava os digitos do telefone no lugar do nome.
+ *
+ * Esse numero nao pode sair daqui: o estatisticas.json e servido publicamente.
+ * Vira "sem nome" mais os 4 ultimos digitos - o suficiente pra quem organiza
+ * distinguir um do outro, sem publicar telefone de ninguem.
+ */
+export function mascararNome(nome: string): string {
+  if (!/^\d{10,15}$/.test(nome)) return nome;
+  return `sem nome · ${nome.slice(-4)}`;
 }
 
 /**
@@ -445,7 +461,7 @@ export function montarEstatisticas(
     distribuicaoNotas,
     volumeConvidados,
     nuncaJogaram: dados.nuncaJogaram.map((l) => ({
-      nome: l.nome,
+      nome: mascararNome(l.nome),
       inscritoAgora: l.inscrito_agora,
     })),
   };

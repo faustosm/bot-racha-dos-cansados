@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { montarEstatisticas, type DadosBrutos } from './estatisticas.js';
+import { mascararNome, montarEstatisticas, type DadosBrutos } from './estatisticas.js';
 
 const dadosBase: DadosBrutos = {
   composicao: [
@@ -144,5 +144,31 @@ describe('nuncaJogaram', () => {
     for (const j of r.nuncaJogaram) {
       assert.deepEqual(Object.keys(j).sort(), ['inscritoAgora', 'nome']);
     }
+  });
+});
+
+// Quem nunca falou com o bot nao tem nome - o cadastro guarda o telefone no
+// lugar. Esse numero nao pode vazar pro estatisticas.json, que e publico.
+describe('mascararNome', () => {
+  it('troca telefone por "sem nome" + 4 digitos', () => {
+    assert.equal(mascararNome('551199990000'), 'sem nome · 0000');
+  });
+
+  it('nao mexe em nome de verdade', () => {
+    assert.equal(mascararNome('Elias Lemes'), 'Elias Lemes');
+    assert.equal(mascararNome('Markin🙏🏻⚽️⚽️'), 'Markin🙏🏻⚽️⚽️');
+  });
+
+  it('nao confunde nome curto com numero com nome', () => {
+    // Apelido numerico improvavel, mas curto demais pra ser telefone.
+    assert.equal(mascararNome('10'), '10');
+  });
+
+  it('mascara na lista publicada, nao so na funcao', () => {
+    const r = montarEstatisticas(
+      { ...dadosBase, nuncaJogaram: [{ nome: '551199991234', inscrito_agora: false }] },
+      new Date(),
+    );
+    assert.equal(r.nuncaJogaram[0]?.nome, 'sem nome · 1234');
   });
 });
