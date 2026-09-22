@@ -33,6 +33,12 @@ down: ## Para a stack (mantem os volumes)
 restart: ## Reinicia apenas o bot (apos mudar o .env)
 	docker compose up -d --force-recreate bot
 
+.PHONY: publicar-site
+publicar-site: ## Publica site/ (/regras e /estatistica) no repo do site
+	docker compose run --rm --no-deps \
+		-v "$(CURDIR)/site:/site:ro" \
+		bot npx tsx src/publicar-site.ts /site
+
 .PHONY: ps
 ps: ## Estado dos containers
 	docker compose ps

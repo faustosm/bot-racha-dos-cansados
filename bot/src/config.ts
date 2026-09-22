@@ -44,8 +44,20 @@ const schema = z.object({
   // --- Regras do racha -----------------------------------------------------
   // A lista de linha e separada da lista de goleiro (13/08/2026): goleiro tem
   // teto proprio (VAGAS_GOLEIRO) e nunca ocupa vaga dos 18.
+  //
+  // VAGAS_TOTAL e quantos JOGAM, nao quantos podem se inscrever: passando
+  // disso o fixo entra na reserva (21/09/2026, ver domain/lista.ts).
   VAGAS_TOTAL: z.coerce.number().int().positive().default(18),
   VAGAS_GOLEIRO: z.coerce.number().int().nonnegative().default(2),
+
+  // Quantos convidados de LINHA cada fixo pode trazer. Goleiro nao conta -
+  // tem lista e teto proprios (VAGAS_GOLEIRO).
+  //
+  // Existe desde 22/09/2026, quando o convidado passou a entrar na RESERVA em
+  // vez de ser recusado com a lista cheia: ate ali o teto de VAGAS_TOTAL era o
+  // unico freio, e sem ele um fixo sozinho encheria a fila de convidados na
+  // frente dos fixos que marcassem depois.
+  MAX_CONVIDADOS_POR_FIXO: z.coerce.number().int().positive().default(1),
 
   // Cron do agendador (horario local do container, TZ=America/Sao_Paulo).
   CRON_ABRE_FIXOS: z.string().default('0 12 * * 3'), // quarta 12:00

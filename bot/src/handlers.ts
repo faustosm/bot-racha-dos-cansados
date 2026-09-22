@@ -7,6 +7,8 @@ import {
   adicionarConvidado,
   confirmarFixo,
   desistir,
+  type Confirmacao,
+  type Promovido,
   jaOfertadoGoleiro,
   listar,
   listarGoleiros,
@@ -17,7 +19,12 @@ import {
   restaurarInscricao,
 } from './domain/inscricao.js';
 import { isoDate, proximaAberturaFixos } from './domain/datas.js';
-import { buscarPorNome, definirNaoPerturbe, resolver } from './domain/jogador.js';
+import {
+  buscarPorId,
+  buscarPorNome,
+  definirNaoPerturbe,
+  resolver,
+} from './domain/jogador.js';
 import type { Jogador } from './domain/jogador.js';
 import {
   avaliacaoAberta,
@@ -47,10 +54,10 @@ import type { ConviteAvaliacao } from './domain/avaliacao.js';
 import { decifrarVoto, opcoesEscolhidas } from './domain/voto.js';
 import {
   alertasDeVagas,
-  cabeMais,
   contarVagas,
   formatarLista,
   rotuloData,
+  textoDePromocao,
 } from './domain/lista.js';
 import type { ItemLista, Partida } from './domain/tipos.js';
 import { comoFalarComOBot } from './link.js';
@@ -102,8 +109,8 @@ const COMANDOS_FORTES = new Set<Intencao['tipo']>([
 const OPCOES_NOMES = [
   'Não entendi. Aqui eu espero uma destas coisas:',
   '',
-  '  os nomes dos convidados, separados por vírgula',
-  '    ex: Joao, Pedro',
+  '  o nome do seu convidado',
+  '    ex: Joao',
   '  "não" (ou "nenhum") se não for levar ninguém',
 ].join('\n');
 
@@ -130,7 +137,10 @@ const AJUDA = [
   'TIRAR UM CONVIDADO',
   '  Me manda aqui: "João não vai mais"',
   '',
-  'A lista tem 18 vagas — todas de linha.',
+  'A lista tem 18 vagas de linha. Depois delas, quem marcar entra na RESERVA',
+  'e sobe sozinho se alguém sair — eu te aviso aqui quando acontecer.',
+  'Vale pra convidado também: entra na fila, na ordem de chegada.',
+  'Cada pessoa leva 1 convidado, a partir de quinta ao meio-dia.',
   'Goleiro é contratado por fora ou convidado de um fixo, lista à parte.',
   '  Me manda aqui: "contratei um goleiro" ou "chamei um goleiro"',
   '',
@@ -294,15 +304,20 @@ async function publicarLista(
  * Registra a ENTRADA de um FIXO (confirmacao pela enquete, ou volta de um
  * convidado orfao cujo anfitriao ja tinha saido).
  *
- * Fica em silencio, exceto quando a lista acabou de lotar - aquela e a hora em
- * que o grupo precisa saber, senao gente continua tentando entrar. Confirmacao
- * de fixo nao merece mais que isso: sao dezenas por semana, e quem esta
- * olhando o grupo ja ve o proprio voto na enquete.
+ * Fica em silencio, exceto em dois momentos: quando a lista acabou de lotar
+ * (senao gente continua tentando entrar) e quando alguem entrou na RESERVA -
+ * esse aviso e curto, so uma linha, e existe porque a pessoa marcou na
+ * enquete e sem ele acharia que esta escalada. Confirmacao normal de fixo nao
+ * merece mais que isso: sao dezenas por semana, e quem esta olhando o grupo ja
+ * ve o proprio voto na enquete.
  */
 async function registrarEntrada(
   ctx: Sessao,
   partida: Partida,
-  lotouAgora: boolean,
+  entrada: Pick<
+    Confirmacao,
+    'reserva' | 'posicaoNaReserva' | 'lotouAgora' | 'novo'
+  >,
   /**
    * Quem entrou. Nem sempre e quem mandou a mensagem: pelo comando de admin
    * (`tratarAdmin`) uma pessoa inscreve outra, e o anuncio de lista fechada
@@ -312,7 +327,21 @@ async function registrarEntrada(
 ): Promise<void> {
   const itens = await listar(partida.id);
   await sincronizarStatus(partida, itens);
-  if (!lotouAgora) return;
+
+  // `novo`: trocar o voto de "Vou" para "Vou com convidado" nao muda a vaga de
+  // quem ja esta na fila - avisar de novo repetiria a mesma linha no grupo.
+  if (entrada.reserva && entrada.novo) {
+    // Linha unica, sem republicar a lista: a fila costuma receber varias
+    // pessoas seguidas, e uma lista inteira por reserva viraria mural de bot.
+    await avisarGrupo(
+      ctx,
+      `🪑 ${quemEntrou} entrou na reserva (${entrada.posicaoNaReserva}º da fila). Se alguém sair, entra na hora.`,
+    );
+    return;
+  }
+  if (entrada.reserva) return;
+
+  if (!entrada.lotouAgora) return;
 
   // O cabecalho NAO repete "lista completa": `publicarLista` ja acrescenta o
   // alerta, e o rodape da lista tambem diz. Antes a mesma frase saia tres
@@ -358,12 +387,82 @@ async function registrarSaida(
   ctx: Sessao,
   partida: Partida,
   cabecalho: string,
-  abriuVaga: boolean,
+  saida: { abriuVaga: boolean; promovidos: readonly Promovido[] },
 ): Promise<void> {
   const itens = await listar(partida.id);
   await sincronizarStatus(partida, itens);
-  if (!abriuVaga) return;
+
+  // Alguem subiu da reserva: isso SEMPRE vai pro grupo, com ou sem lista
+  // cheia antes. E a informacao mais util da semana pra quem estava
+  // esperando - e pro resto do time, que precisa saber quem vai jogar.
+  if (saida.promovidos.length) {
+    const nomes = saida.promovidos.map((p) => p.nome).join(', ');
+    const verbo = saida.promovidos.length > 1 ? 'entraram' : 'entrou';
+    await publicarLista(
+      ctx,
+      partida,
+      `${cabecalho}\n✅ ${nomes} ${verbo} no lugar, direto da reserva!`,
+    );
+    await avisarPromovidos(ctx, partida, saida.promovidos);
+    return;
+  }
+
+  if (!saida.abriuVaga) return;
   await publicarLista(ctx, partida, cabecalho);
+}
+
+/**
+ * Avisa no privado quem subiu da reserva.
+ *
+ * O anuncio no grupo nao basta: a pessoa marcou "vou" dias atras, ficou de
+ * fora e nao tem motivo pra ficar conferindo a lista - ela precisa saber que
+ * agora esta escalada (e que pode sair, se nao der mais).
+ *
+ * Mensagem que o BOT inicia: vai pela fila espacada e respeita `nao_perturbe`
+ * e quem nao tem telefone cadastrado, mesmas regras de `puxarConversa` e dos
+ * convites de avaliacao.
+ *
+ * Convidado nao tem cadastro proprio, entao o aviso dele vai para o PADRINHO
+ * (22/09/2026). Ate ali esse caso era teorico - convidado so entrava havendo
+ * vaga, nunca ficava na reserva - e o codigo se contentava com o anuncio no
+ * grupo. Com convidado na fila virou rotina, e confiar no grupo significa o
+ * padrinho descobrir no sabado que o cara dele tinha entrado.
+ */
+async function avisarPromovidos(
+  ctx: Sessao,
+  partida: Partida,
+  promovidos: readonly Promovido[],
+): Promise<void> {
+  // Agrupa por DESTINATARIO antes de escrever: uma saida que libera duas
+  // vagas pode promover o fixo e o convidado dele de uma vez, e sem isso ele
+  // recebe duas mensagens seguidas quase iguais.
+  const porPessoa = new Map<number, { eu: boolean; convidados: string[] }>();
+  for (const p of promovidos) {
+    const avisar = p.jogadorId ?? p.convidadoDeId;
+    // Convidado sem padrinho (o anfitriao saiu e ele ficou) nao tem a quem
+    // avisar: segue so no anuncio do grupo.
+    if (avisar === null) continue;
+    const atual = porPessoa.get(avisar) ?? { eu: false, convidados: [] };
+    if (p.jogadorId !== null) atual.eu = true;
+    else atual.convidados.push(p.nome);
+    porPessoa.set(avisar, atual);
+  }
+
+  const quando = rotuloData(partida.data_jogo);
+  for (const [jogadorId, quem] of porPessoa) {
+    const jogador = await buscarPorId(jogadorId);
+    if (!jogador || jogador.naoPerturbe || !jogador.telefone) continue;
+
+    enfileirar(ctx.log, {
+      tipo: 'texto',
+      para: jogador.telefone,
+      texto: [
+        ...textoDePromocao(quem, quando),
+        '',
+        '(não quer que eu te chame? responde "não perturbe")',
+      ].join('\n'),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -395,26 +494,60 @@ async function iniciarConvidados(
   await noPrivado(ctx, pergunta);
 }
 
-/** Cadastra um lote de convidados de LINHA e resume o que entrou. */
+/**
+ * Cadastra um lote de convidados de LINHA e resume o que entrou.
+ *
+ * O resumo diz ONDE cada um caiu, nao so que foi anotado: desde 22/09/2026 o
+ * convidado pode entrar direto na reserva, e "Anotado: Paulo" sozinho fazia o
+ * padrinho achar que tinha vaga garantida. Mesma informacao que o fixo ja
+ * recebia em `registrarEntrada`.
+ */
 async function registrarConvidadosLinha(
   ctx: Sessao,
   partida: Partida,
   nomes: readonly string[],
 ): Promise<void> {
-  const entraram: string[] = [];
+  const entraram: { nome: string; reserva: boolean; lugar: number }[] = [];
   for (const nome of nomes) {
     const r = await adicionarConvidado(partida, ctx.jogadorId, nome, 'linha');
-    if (r.ok) entraram.push(nome);
-    else await noPrivado(ctx, `${nome}: ${r.motivo}`);
+    if (r.ok) {
+      entraram.push({
+        nome,
+        reserva: r.valor.reserva,
+        lugar: r.valor.posicaoNaReserva,
+      });
+    } else await noPrivado(ctx, `${nome}: ${r.motivo}`);
   }
   if (!entraram.length) return;
-  await noPrivado(ctx, `Anotado: ${entraram.join(', ')}.`, { rodape: true });
 
+  const comLugar = (c: (typeof entraram)[number]): string =>
+    c.reserva ? `${c.nome} 🪑 (reserva, ${c.lugar}º da fila)` : c.nome;
+  const naReserva = entraram.filter((c) => c.reserva);
+
+  await noPrivado(
+    ctx,
+    [
+      `Anotado: ${entraram.map(comLugar).join(', ')}.`,
+      ...(naReserva.length
+        ? [
+            naReserva.length === 1
+              ? 'As vagas de linha já estão ocupadas — se alguém sair, ele entra e eu te aviso aqui.'
+              : 'As vagas de linha já estão ocupadas — eles sobem na ordem se alguém sair, e eu te aviso aqui.',
+          ]
+        : []),
+    ].join('\n'),
+    { rodape: true },
+  );
+
+  // O "!" e de quem entrou pra jogar. Caindo na reserva o anuncio vira
+  // informativo: comemorar vaga que nao existe e o que confundia antes.
   const rotulo = entraram.length > 1 ? 'convidados' : 'convidado';
   await registrarEntradaConvidado(
     ctx,
     partida,
-    `👥 ${ctx.nomeNaLista} confirmou ${rotulo}: ${entraram.join(', ')}!`,
+    naReserva.length
+      ? `👥 ${ctx.nomeNaLista} confirmou ${rotulo}: ${entraram.map(comLugar).join(', ')}.`
+      : `👥 ${ctx.nomeNaLista} confirmou ${rotulo}: ${entraram.map((c) => c.nome).join(', ')}!`,
   );
 }
 
@@ -590,8 +723,7 @@ async function continuarDialogo(
       await noPrivado(
         ctx,
         [
-          'Boa! Agora manda os NOMES dos convidados.',
-          'Exemplo: João, Pedro',
+          'Boa! Agora manda o NOME do seu convidado.',
           '',
           'Se desistir, responda "não".',
         ].join('\n'),
@@ -810,39 +942,44 @@ async function tratarConfirmar(ctx: Sessao, partida: Partida): Promise<void> {
 
   if (r.valor.jaEstava) {
     // "Ja estava" sozinho deixava a pessoa sem saber o proximo passo (saiu?
-    // quer convidar?). So oferece "levar convidado" se ainda cabe: sugerir
-    // isso com a lista cheia so pra `adicionarConvidado` recusar depois e a
-    // mesma confusao do caso Thiago Juliano/Gustavo.
-    const itens = await listar(partida.id);
+    // quer convidar?). O convite agora e oferecido sempre: com a lista cheia
+    // o convidado entra na reserva em vez de ser recusado, entao sugerir isso
+    // nao cria mais a expectativa falsa do caso Thiago Juliano/Gustavo.
     const linhas = [
-      'Você já está confirmado na lista ✅.',
+      r.valor.reserva
+        ? `Você já está na lista, na RESERVA (${r.valor.posicaoNaReserva}º da fila) 🪑. Se abrir vaga, você entra e eu te aviso.`
+        : 'Você já está confirmado na lista ✅.',
       `Pra sair, muda seu voto pra "${OPCAO_NAO_VOU}" na enquete (ou responde "não vou mais" aqui).`,
+      `Pra levar um convidado, muda pra "${OPCAO_VOU_COM_CONVIDADO}" (ou manda "quero levar convidado" aqui).`,
+      'Outras opções: "ajuda".',
     ];
-    if (cabeMais(contarVagas(itens, partida.vagas_total))) {
-      linhas.push(
-        `Pra levar um convidado, muda pra "${OPCAO_VOU_COM_CONVIDADO}" (ou manda "quero levar convidado" aqui).`,
-      );
-    }
-    linhas.push('Outras opções: "ajuda".');
     await noPrivado(ctx, linhas.join('\n'), { rodape: true });
     // Nada mudou na lista: republicar seria so ruido.
     return;
   }
 
-  await noPrivado(ctx, `Confirmado como ${r.valor.posicao}. ✅`, {
-    rodape: true,
-  });
+  await noPrivado(
+    ctx,
+    r.valor.reserva
+      ? [
+          `🪑 Você está na RESERVA, ${r.valor.posicaoNaReserva}º da fila.`,
+          `As ${partida.vagas_total} vagas de linha já estão ocupadas — se alguém sair, você entra automaticamente e eu te aviso aqui.`,
+        ].join('\n')
+      : `Confirmado como ${r.valor.posicao}. ✅`,
+    { rodape: true },
+  );
 
-  await registrarEntrada(ctx, partida, r.valor.lotouAgora);
+  await registrarEntrada(ctx, partida, r.valor);
 
+  // Quem esta na reserva tambem leva convidado: o convidado entra na fila
+  // atras dele, e os dois sobem na ordem (decisao de 22/09/2026).
   if (!r.valor.novo) return;
 
   // A pergunta sobre convidados so faz sentido depois de quinta 12:00.
   if (convidadosLiberados(partida)) {
     const pergunta = [
       'Vai levar convidado?',
-      'Manda os nomes separados por vírgula (ex: João, Pedro),',
-      'ou responda "não".',
+      'Manda o nome dele, ou responda "não".',
     ].join('\n');
     await conversa.salvar(ctx.jogadorId, partida.id, 'aguardando_nomes', {
       pergunta,
@@ -882,7 +1019,7 @@ async function tratarDesistir(
   const extra = n > 0 ? ` (levou ${n} convidado${n > 1 ? 's' : ''} junto)` : '';
 
   const cabecalho = `❌ ${ctx.nomeNaLista} não vai mais${extra}. Liberou vaga!`;
-  await registrarSaida(ctx, partida, cabecalho, r.valor.abriuVaga);
+  await registrarSaida(ctx, partida, cabecalho, r.valor);
 
   if (n === 0) return;
 
@@ -954,23 +1091,9 @@ async function tratarQueroConvidar(
     return;
   }
 
-  // Mesmo caso do voto "com convidado" (ver tratarVotoConfirmacao): perguntar
-  // o nome so pra `adicionarConvidado` recusar em seguida confunde quem
-  // respondeu achando que o convidado entrou.
-  const itensAtuais = await listar(partida.id);
-  if (!cabeMais(contarVagas(itensAtuais, partida.vagas_total))) {
-    await noPrivado(
-      ctx,
-      '❌ A lista de linha já está completa, não sobrou vaga pro seu convidado. Se alguém sair eu aviso o grupo.',
-      { rodape: true },
-    );
-    return;
-  }
-
   const pergunta = [
     'Boa! Quem você vai levar?',
-    'Manda o nome. Se for mais de um, separe por vírgula:',
-    '  João, Pedro',
+    'Manda o nome.',
     '',
     '("cancelar" se mudou de ideia)',
   ].join('\n');
@@ -1056,7 +1179,7 @@ async function tratarTirarConvidado(
     ctx,
     partida,
     `❌ ${r.nome} (convidado de ${ctx.nomeNaLista}) não vai mais. Liberou vaga!`,
-    r.abriuVaga,
+    { abriuVaga: r.abriuVaga, promovidos: r.promovidos },
   );
 }
 
@@ -1073,6 +1196,7 @@ const AJUDA_ADMIN = [
   'Serve pra quem não consegue votar na enquete — sem o celular na mão, por exemplo.',
   'Use o nome como ele aparece na lista; se houver mais de um parecido, eu pergunto.',
   'Não anuncio nada no grupo na hora: a lista sai às 19:00, como sempre, ou na hora em que as vagas fecharem.',
+  'Com as vagas cheias ele entra na reserva, na ordem — igual a qualquer um.',
 ].join('\n');
 
 /**
@@ -1195,16 +1319,15 @@ async function tratarAdmin(
   // Publica no grupo SE, e so se, esta entrada fechou as vagas - a mesma
   // regra de qualquer confirmacao. A resposta ao admin vem depois, para nao
   // dizer "nao anunciei" um instante antes de anunciar.
-  await registrarEntrada(ctx, partida, r.valor.lotouAgora, alvo.nome);
+  await registrarEntrada(ctx, partida, r.valor, alvo.nome);
 
   const vagas = contarVagas(await listar(partida.id), partida.vagas_total);
-  await noPrivado(
-    ctx,
-    r.valor.lotouAgora
+  const resposta = r.valor.reserva
+    ? `Coloquei ${alvo.nome} na RESERVA 🪑 (${r.valor.posicaoNaReserva}º da fila) — as ${vagas.total} vagas de linha já estavam ocupadas. Avisei no grupo em uma linha; ele entra sozinho se alguém sair.`
+    : r.valor.lotouAgora
       ? `Coloquei ${alvo.nome} na lista ✅ — e com ele fechou (${vagas.ocupadas}/${vagas.total}), então publiquei no grupo.`
-      : `Coloquei ${alvo.nome} na lista ✅ (${vagas.ocupadas}/${vagas.total}). Não anunciei no grupo — a lista sai às 19:00.`,
-    { rodape: true },
-  );
+      : `Coloquei ${alvo.nome} na lista ✅ (${vagas.ocupadas}/${vagas.total}). Não anunciei no grupo — a lista sai às 19:00.`;
+  await noPrivado(ctx, resposta, { rodape: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,8 +1514,10 @@ async function tratarVotoConfirmacao(
 
   const r = await confirmarFixo(partida, ctx.jogadorId, 'linha');
   if (!r.ok) {
-    // Recusa (lista cheia) precisa aparecer: o voto ficou marcado na enquete e
-    // a pessoa acharia que entrou.
+    // Lista cheia nao cai mais aqui: fixo sempre entra, nem que seja na
+    // reserva (ver `motivoDeCapacidade`). O que sobra sao recusas de verdade,
+    // e elas precisam aparecer - o voto ficou marcado na enquete e a pessoa
+    // acharia que entrou.
     //
     // O voto NAO e registrado aqui de proposito: registrar uma tentativa que
     // falhou faria a proxima tentativa identica ser silenciada pelo dedupe, e
@@ -1401,10 +1526,17 @@ async function tratarVotoConfirmacao(
     return;
   }
 
-  // Deu certo: agora sim o voto vira o "anterior" das proximas vezes.
-  await registrarVoto(partida.id, ctx.jogadorId, opcao);
-
   const comConvidado = acao.tipo === 'confirmar_com_convidado';
+
+  // O voto so vira o "anterior" das proximas vezes quando TUDO que ele pedia
+  // aconteceu. "Vou com convidado" antes de quinta 12:00 entrega metade: a
+  // presenca entra, o convidado nao. Registrar assim mesmo faria o dedupe do
+  // topo desta funcao engolir a segunda tentativa, e a pessoa nunca seria
+  // chamada pra dizer o nome - mesmo motivo pelo qual a recusa de
+  // `confirmarFixo`, acima, tambem nao registra.
+  if (!comConvidado || convidadosLiberados(partida)) {
+    await registrarVoto(partida.id, ctx.jogadorId, opcao);
+  }
 
   // O anuncio segue a OPCAO, nao o estado da lista. Trocar "Vou" por "Vou com
   // convidado" nao muda a vaga - `confirmarFixo` devolve "ja estava" - mas
@@ -1415,31 +1547,17 @@ async function tratarVotoConfirmacao(
   // bot precisar insistir no privado.
   // Confirmacao NAO interrompe o grupo: sao dezenas por semana e a lista sai
   // no digest das 19:00. So o "lotou agora" escapa daqui.
-  await registrarEntrada(ctx, partida, r.valor.lotouAgora);
+  await registrarEntrada(ctx, partida, r.valor);
 
   if (!comConvidado) return;
 
-  // Antes de quinta 12:00 a vaga de convidado nem existe. Avisa no privado e
-  // nao abre conversa: quem quiser insiste votando de novo depois que abrir.
+  // Antes de quinta 12:00 convidado nem existe. O voto de quem pediu convidado
+  // cedo nao foi registrado (ver acima), entao votar de novo depois que abrir
+  // nao cai no dedupe do topo desta funcao e a pergunta sai de verdade.
   if (!convidadosLiberados(partida)) {
     puxarConversa(
       ctx,
       '⏳ Convidado só a partir de quinta ao meio-dia. Vote de novo depois que abrir que eu te chamo.',
-    );
-    return;
-  }
-
-  // A lista de linha pode ja ter lotado com essa propria confirmacao (o
-  // convidado nao tem vaga), ou ter lotado ANTES, com a pessoa ja fixa
-  // trocando de "vou" para "vou com convidado" sem mudar de vaga. Nos dois
-  // casos, perguntar o nome so para `adicionarConvidado` recusar em seguida
-  // (motivoDaRecusa em domain/lista.ts) confundiria quem respondeu achando
-  // que o convidado entrou. Avisa direto e nem abre a conversa.
-  const itensAtuais = await listar(partida.id);
-  if (!cabeMais(contarVagas(itensAtuais, partida.vagas_total))) {
-    puxarConversa(
-      ctx,
-      '❌ A lista de linha já está completa, não sobrou vaga pro seu convidado. Se alguém sair eu aviso o grupo.',
     );
     return;
   }
@@ -1452,7 +1570,6 @@ async function tratarVotoConfirmacao(
       : 'Oi! Eu cuido da lista do racha ⚽\nVocê marcou na enquete que vai levar convidado.',
     '',
     'Quem você vai levar? Manda o nome.',
-    'Se for mais de um, separe por vírgula: João, Pedro',
     '',
     '("cancelar" se mudou de ideia)',
   ].join('\n');
@@ -1532,6 +1649,8 @@ function ajudaDoGrupo(): string {
     'Digite "lista" para ver a atual.',
     '',
     'Para entrar ou sair, é só tocar na enquete do racha aqui no grupo.',
+    'São 18 vagas de linha; passou disso, entra na reserva e sobe se alguém sair.',
+    'Convidado (1 por pessoa, a partir de quinta 12:00) entra na mesma fila.',
     comoFalarComOBot(),
   ].join('\n');
 }

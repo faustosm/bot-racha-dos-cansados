@@ -4,46 +4,143 @@ import type { ItemGoleiro, ItemLista, Partida, Posicao } from './tipos.js';
 // Sem banco e sem HTTP, o que torna o formato testavel com node --test.
 
 export interface Vagas {
+  /** Quantos estao DENTRO das vagas (nunca passa de `total`). */
   readonly ocupadas: number;
   readonly total: number;
   readonly livres: number;
+  /** Quantos estao na fila de espera, alem das vagas. */
+  readonly reservas: number;
 }
 
 /**
  * Conta so os jogadores de LINHA - goleiro tem teto e contagem propria
  * (`motivoRecusaGoleiro`, `listarGoleiros`) e nunca ocupa vaga da linha.
- * A lista de linha fecha em 18.
+ *
+ * A lista de linha aceita mais gente do que as vagas (decisao de 21/09/2026,
+ * estendida a convidados em 22/09/2026): ninguem e recusado por falta de vaga,
+ * so passa a ser RESERVA. Por isso `ocupadas` nao e `itens.length` - ela para
+ * no teto, e o excedente vira `reservas`.
  */
 export function contarVagas(
   itens: readonly ItemLista[],
   vagasTotal: number,
 ): Vagas {
   return {
-    ocupadas: itens.length,
+    ocupadas: Math.min(itens.length, vagasTotal),
     total: vagasTotal,
     livres: Math.max(0, vagasTotal - itens.length),
+    reservas: Math.max(0, itens.length - vagasTotal),
   };
 }
 
-/** Ha vaga para mais alguem? */
+/**
+ * Entra direto entre os convocados, ou vai pra reserva? Com fila de espera,
+ * vai pra reserva.
+ *
+ * Nao decide mais QUEM PODE entrar - desde 22/09/2026 ninguem e barrado por
+ * falta de vaga. Serve so para escolher o texto: "confirmado" ou "voce ficou
+ * na reserva".
+ */
 export function cabeMais(vagas: Vagas): boolean {
   return vagas.livres > 0;
 }
 
-/** Por que essa pessoa nao pode entrar, se nao puder. */
-export function motivoDaRecusa(
-  ocupadas: number,
-  partida: Pick<Partida, 'vagas_total'>,
-  quantas: number,
-): string | undefined {
-  const livres = partida.vagas_total - ocupadas;
-  if (quantas <= livres) return undefined;
-  return livres <= 0
-    ? `A lista está completa (${partida.vagas_total} jogadores de linha).`
-    : `Só resta${livres === 1 ? '' : 'm'} ${livres} vaga${livres === 1 ? '' : 's'}.`;
+/**
+ * Quem esta convocado e quem esta na fila, pela ordem de confirmacao.
+ *
+ * A ordem de chegada e o criterio: ela decide quem sao os 18 e quem sobe
+ * quando alguem sai. Os itens ja chegam ordenados por `criado_em` do banco.
+ */
+export function separarFila(
+  itens: readonly ItemLista[],
+  vagasTotal: number,
+): { convocados: readonly ItemLista[]; reserva: readonly ItemLista[] } {
+  return {
+    convocados: itens.slice(0, vagasTotal),
+    reserva: itens.slice(vagasTotal),
+  };
 }
 
-/** Por que um goleiro nao pode entrar, se nao puder. Teto proprio, separado da linha. */
+/**
+ * Por que esse CONVIDADO de linha nao pode entrar, se nao puder.
+ *
+ * Desde 22/09/2026 nao e mais falta de vaga: convidado entra na fila como
+ * qualquer um, pela ordem de chegada. O unico limite e quantos cada fixo pode
+ * trazer (MAX_CONVIDADOS_POR_FIXO).
+ *
+ * A troca de criterio foi deliberada: os fixos tem de quarta 12:00 a quinta
+ * 12:00 com a lista so pra eles, entao um fixo que marca depois disso nao tem
+ * preferencia sobre um convidado que ja estava na fila. O que precisa de freio
+ * e o volume por padrinho - sem teto de vagas, um fixo sozinho empurraria a
+ * fila inteira pra tras.
+ */
+export function motivoRecusaConvidado(
+  jaTem: number,
+  max: number,
+): string | undefined {
+  if (jaTem < max) return undefined;
+  return max === 1
+    ? 'Cada pessoa pode levar 1 convidado, e você já tem o seu nesta partida.'
+    : `Cada pessoa pode levar ${max} convidados, e você já tem ${jaTem} nesta partida.`;
+}
+
+/** "A", "A e B", "A, B e C" - para citar nomes numa frase. */
+function juntarNomes(nomes: readonly string[]): string {
+  if (nomes.length <= 1) return nomes[0] ?? '';
+  return `${nomes.slice(0, -1).join(', ')} e ${nomes[nomes.length - 1]}`;
+}
+
+/**
+ * O aviso no privado de quem subiu da reserva.
+ *
+ * Uma mensagem por PESSOA, nao por promocao: quando um fixo sobe junto com o
+ * convidado dele, os dois avisos iam separados e ele recebia duas mensagens
+ * seguidas dizendo quase a mesma coisa (22/09/2026).
+ *
+ * O convidado nao tem WhatsApp cadastrado, entao quem recebe o aviso dele e
+ * sempre o padrinho - e por isso que as frases falam "seu convidado" em vez de
+ * se dirigir a ele.
+ */
+export function textoDePromocao(
+  quem: { eu: boolean; convidados: readonly string[] },
+  quando: string,
+): string[] {
+  const nomes = juntarNomes(quem.convidados);
+  const primeiro = quem.convidados[0] ?? '';
+  const comoSair = (frase: string): string =>
+    `${frase} que eu passo a vaga pro próximo.`;
+
+  if (quem.eu && quem.convidados.length) {
+    return [
+      `🎉 Abriu vaga! Você e ${nomes} estavam na reserva do racha de ${quando} e agora estão escalados.`,
+      '',
+      comoSair(
+        `Se alguém não for mais, me avisa ("não vou mais", ou "${primeiro} não vai mais")`,
+      ),
+    ];
+  }
+  if (quem.eu) {
+    return [
+      `🎉 Abriu vaga e você entrou! Estava na reserva do racha de ${quando} e agora está escalado.`,
+      '',
+      comoSair('Se não der mais, responde "não vou mais"'),
+    ];
+  }
+  if (quem.convidados.length > 1) {
+    return [
+      `🎉 Abriu vaga e seus convidados ${nomes} entraram! Estavam na reserva do racha de ${quando} e agora estão escalados.`,
+      '',
+      comoSair(`Se algum não for mais, me avisa ("${primeiro} não vai mais")`),
+    ];
+  }
+  return [
+    `🎉 Abriu vaga e ${primeiro}, seu convidado, entrou! Estava na reserva do racha de ${quando} e agora está escalado.`,
+    '',
+    comoSair(`Se ele não for mais, me avisa ("${primeiro} não vai mais")`),
+  ];
+}
+
+/** Por que um goleiro nao pode entrar, se nao puder. Teto proprio, sem fila. */
 export function motivoRecusaGoleiro(
   ocupados: number,
   vagasGoleiro: number,
@@ -123,6 +220,11 @@ function linhaGoleiro(g: ItemGoleiro, presentes: ReadonlySet<number>): string {
  * saber quem chegou primeiro e quem chegou por ultimo, e duas numeracoes
  * paralelas destruiriam essa leitura.
  *
+ * A RESERVA sai no mesmo texto, logo abaixo dos convocados e com a numeracao
+ * continuando (19, 20...): e a mesma fila, so que a partir dali as pessoas
+ * estao esperando vaga. Quem le precisa ver as duas coisas de uma vez - quem
+ * joga sabado e quem entra se alguem cair.
+ *
  * Goleiro e lista PROPRIA, a parte - nunca entra na numeracao nem no X/18.
  */
 export function formatarLista(
@@ -132,9 +234,12 @@ export function formatarLista(
   nomeDoRacha = 'Racha',
 ): string {
   const vagas = contarVagas(itens, partida.vagas_total);
+  const { convocados, reserva } = separarFila(itens, partida.vagas_total);
 
   const partes: string[] = [
-    `⚽ ${nomeDoRacha} — ${rotuloData(partida.data_jogo)} · ${vagas.ocupadas}/${vagas.total}`,
+    `⚽ ${nomeDoRacha} — ${rotuloData(partida.data_jogo)} · ${vagas.ocupadas}/${vagas.total}${
+      vagas.reservas ? ` (+${vagas.reservas} na reserva)` : ''
+    }`,
     '',
   ];
 
@@ -145,10 +250,20 @@ export function formatarLista(
   );
 
   partes.push(
-    ...(itens.length
-      ? itens.map((item, n) => linhaItem(n + 1, item, presentes))
+    ...(convocados.length
+      ? convocados.map((item, n) => linhaItem(n + 1, item, presentes))
       : ['  ninguém confirmou ainda']),
   );
+
+  if (reserva.length) {
+    partes.push(
+      '',
+      '🪑 Reserva (entra na ordem, se alguém sair):',
+      ...reserva.map((item, n) =>
+        linhaItem(partida.vagas_total + n + 1, item, presentes),
+      ),
+    );
+  }
 
   partes.push(
     '',
@@ -156,7 +271,11 @@ export function formatarLista(
     // linha so deixava parecer que os goleiros contam dentro do X/18. Precisa
     // ficar claro que sao dois times diferentes de gente, ou membros com mais
     // dificuldade de leitura entendem que a lista inclui goleiro.
-    `${vagas.ocupadas}/${vagas.total} de linha.`,
+    `${vagas.ocupadas}/${vagas.total} de linha${
+      vagas.reservas
+        ? ` e ${vagas.reservas} na reserva`
+        : ''
+    }.`,
     goleiros.length
       ? `🧤 Goleiros: ${goleiros.map((g) => linhaGoleiro(g, presentes)).join(', ')}.`
       : '🧤 Goleiro: nenhum confirmado ainda.',
@@ -176,7 +295,16 @@ export function formatarLista(
  */
 export function alertasDeVagas(vagas: Vagas, limiar: number): string[] {
   if (vagas.livres === 0) {
-    return [`🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha.`];
+    // Com fila, "lista completa" sozinho soaria como "nao adianta marcar" -
+    // e adianta: quem marca agora fica na reserva e sobe se alguem cair.
+    return vagas.reservas
+      ? [
+          `🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha, ${vagas.reservas} na reserva.`,
+        ]
+      : [
+          `🔒 LISTA COMPLETA! ${vagas.ocupadas}/${vagas.total} na linha.`,
+          'Quem marcar a partir de agora entra na reserva.',
+        ];
   }
   if (vagas.livres <= limiar) {
     return [
