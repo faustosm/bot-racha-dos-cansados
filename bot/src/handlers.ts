@@ -1426,6 +1426,30 @@ export async function tratarVotoDeEnquete(v: VotoRecebido): Promise<void> {
   );
 }
 
+/** Resposta no privado pra quem votou de novo na mesma opcao. So leitura. */
+async function textoVotoRepetido(
+  partida: Partida,
+  jogadorId: number,
+  naoVou: boolean,
+): Promise<string> {
+  const quando = rotuloData(partida.data_jogo);
+  if (naoVou) {
+    return `Seu voto "${OPCAO_NAO_VOU}" já tava registrado — você está fora da lista de ${quando}.`;
+  }
+  const inscricao = await minhaInscricao(partida.id, jogadorId);
+  if (!inscricao) {
+    return `Seu voto já tava registrado, mas você não está na lista de ${quando}. Me manda "vou" aqui que eu confirmo.`;
+  }
+  if (inscricao.posicao === 'linha') {
+    const linha = await listar(partida.id);
+    const pos = linha.findIndex((i) => i.jogadorId === jogadorId) + 1;
+    if (pos > partida.vagas_total) {
+      return `Seu voto já tava registrado ✅ Você está na RESERVA (${pos - partida.vagas_total}º da fila) 🪑.`;
+    }
+  }
+  return `Seu voto já tava registrado ✅ Você está na lista de ${quando}.`;
+}
+
 /**
  * Um voto na enquete de CONFIRMACAO do grupo. E o caminho principal de
  * confirmacao: um toque, sem sair da conversa, sem o bot precisar escrever
@@ -1502,9 +1526,15 @@ async function tratarVotoConfirmacao(
     'voto recebido',
   );
 
-  // Mesma opcao de novo: reentrega do WhatsApp, ou a pessoa tocou duas vezes.
-  // Anunciar seria repetir a mesma informacao no grupo.
-  if (anterior === opcao) return;
+  // Mesma opcao de novo: a pessoa tocou outra vez (reentrega do webhook ja cai
+  // no dedupe por id em server.ts). Anunciar no grupo repetiria a mesma
+  // informacao; so no privado, pra ela saber que o toque nao se perdeu - caso
+  // do Bricyo Xavier, 23/09/2026. Le a lista de verdade em vez de confiar no
+  // voto: um admin pode ter tirado a pessoa depois.
+  if (anterior === opcao) {
+    puxarConversa(ctx, await textoVotoRepetido(partida, ctx.jogadorId, acao.tipo === 'desistir'));
+    return;
+  }
 
   if (acao.tipo === 'desistir') {
     await tratarDesistir(ctx, partida, { origemVoto: true });

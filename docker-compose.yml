@@ -138,6 +138,10 @@ services:
       EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
       WEBHOOK_TOKEN: ${WEBHOOK_TOKEN}
       GROUP_JID: ${GROUP_JID}
+      # Avisos a quem organiza: alerta de voto perdido no privado do admin e
+      # lembrete de 11:59 de quarta no grupo do comite. Vazio desliga.
+      ADMIN_TELEFONE: ${ADMIN_TELEFONE:-}
+      GRUPO_ADMIN_JID: ${GRUPO_ADMIN_JID:-}
 
       # Regras do racha. Os defaults aqui valem se o .env nao definir - assim
       # um .env antigo nao quebra o boot.
@@ -147,6 +151,7 @@ services:
       CRON_FECHA: ${CRON_FECHA:-0 7 * * 6}
       CRON_CHAMADA: ${CRON_CHAMADA:-0 8 * * 5}
       CRON_DIGEST: ${CRON_DIGEST:-0 19 * * 3-5}
+      CRON_AVISO_ABERTURA: ${CRON_AVISO_ABERTURA:-59 11 * * 3}
       ALERTA_VAGAS: ${ALERTA_VAGAS:-2}
       MIN_JOGADORES: ${MIN_JOGADORES:-12}
       CONVERSA_TTL_MIN: ${CONVERSA_TTL_MIN:-15}

@@ -241,6 +241,18 @@
   }
   .td-muted { color: var(--ink-faint); }
 
+  /* ---------- ainda nao estrearam ---------- */
+  .espera { display: flex; flex-wrap: wrap; gap: 6px; }
+  .espera-nome {
+    font-size: 13px; color: var(--ink-2); background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  }
+  /* Ja esta na lista da semana: vai estrear se o racha acontecer. */
+  .espera-nome.vem {
+    color: var(--ink); border-color: var(--s-convidado-soft);
+  }
+  .espera-nome.vem::after { content: ' · na lista'; color: var(--ink-muted); font-size: 11px; }
+
   /* ---------- tooltip ---------- */
   #tip {
     position: fixed; pointer-events: none; background: var(--ink-2); color: var(--bg);

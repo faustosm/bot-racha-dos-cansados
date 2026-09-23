@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { montarEstatisticas, type DadosBrutos } from './estatisticas.js';
+import { mascararNome, montarEstatisticas, type DadosBrutos } from './estatisticas.js';
 
 const dadosBase: DadosBrutos = {
   composicao: [
@@ -32,6 +32,10 @@ const dadosBase: DadosBrutos = {
     { convidado_nome: 'Diego', data_jogo: '2026-08-15', anfitriao: 'Ana' },
   ],
   jogadoresCadastrados: 10,
+  nuncaJogaram: [
+    { nome: 'Elias', inscrito_agora: false },
+    { nome: 'Fabio', inscrito_agora: true },
+  ],
 };
 
 describe('montarEstatisticas', () => {
@@ -74,6 +78,7 @@ describe('montarEstatisticas', () => {
       distribuicaoNotas: [],
       aparicoesConvidados: [],
       jogadoresCadastrados: 5,
+      nuncaJogaram: [],
     };
     const r = montarEstatisticas(vazio, new Date());
     assert.equal(r.resumo.taxaLotacaoLinha, null);
@@ -113,5 +118,57 @@ describe('montarEstatisticas', () => {
       vezes: 4,
       faltamParaFixo: 0,
     });
+  });
+});
+
+// Quem nunca foi convocado nao aparecia em lugar nenhum das estatisticas:
+// `presenca` so lista quem jogou, e o resumo dava so o numero. Sem a lista,
+// "29 de 38 ja jogaram" nao dizia QUEM sao os outros 9 (22/09/2026).
+describe('nuncaJogaram', () => {
+  it('leva os cadastrados sem nenhuma convocacao, com o nome', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    assert.deepEqual(
+      r.nuncaJogaram.map((j) => j.nome),
+      ['Elias', 'Fabio'],
+    );
+  });
+
+  it('marca quem ja esta inscrito na partida em aberto', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    assert.equal(r.nuncaJogaram[0]?.inscritoAgora, false);
+    assert.equal(r.nuncaJogaram[1]?.inscritoAgora, true);
+  });
+
+  it('nao expoe telefone - o JSON e publico', () => {
+    const r = montarEstatisticas(dadosBase, new Date());
+    for (const j of r.nuncaJogaram) {
+      assert.deepEqual(Object.keys(j).sort(), ['inscritoAgora', 'nome']);
+    }
+  });
+});
+
+// Quem nunca falou com o bot nao tem nome - o cadastro guarda o telefone no
+// lugar. Esse numero nao pode vazar pro estatisticas.json, que e publico.
+describe('mascararNome', () => {
+  it('troca telefone por "sem nome" + 4 digitos', () => {
+    assert.equal(mascararNome('551199990000'), 'sem nome · 0000');
+  });
+
+  it('nao mexe em nome de verdade', () => {
+    assert.equal(mascararNome('Elias Lemes'), 'Elias Lemes');
+    assert.equal(mascararNome('Markin🙏🏻⚽️⚽️'), 'Markin🙏🏻⚽️⚽️');
+  });
+
+  it('nao confunde nome curto com numero com nome', () => {
+    // Apelido numerico improvavel, mas curto demais pra ser telefone.
+    assert.equal(mascararNome('10'), '10');
+  });
+
+  it('mascara na lista publicada, nao so na funcao', () => {
+    const r = montarEstatisticas(
+      { ...dadosBase, nuncaJogaram: [{ nome: '551199991234', inscrito_agora: false }] },
+      new Date(),
+    );
+    assert.equal(r.nuncaJogaram[0]?.nome, 'sem nome · 1234');
   });
 });

@@ -440,6 +440,46 @@
     ]);
   }
 
+  // ── Ainda não estrearam ───────────────────────────────────────────────
+  //
+  // O complemento de "Presença dos fixos": quem esta cadastrado e nunca foi
+  // convocado nao aparece la (a tabela so lista quem jogou), entao sumia da
+  // pagina inteira. O KPI dizia "29 de 38 ja jogaram" sem dizer quem sao os
+  // outros 9.
+  //
+  // So nome - o JSON e servido publicamente, e telefone nao acrescenta nada
+  // a quem quer saber quem falta estrear.
+
+  function montarNuncaJogaram(nuncaJogaram, totalRachas) {
+    if (!nuncaJogaram || nuncaJogaram.length === 0) return null;
+
+    var lista = el('div', { class: 'espera' });
+    nuncaJogaram.forEach(function (j) {
+      lista.appendChild(el('span', {
+        class: 'espera-nome' + (j.inscritoAgora ? ' vem' : ''),
+        text: j.nome,
+        title: j.inscritoAgora
+          ? j.nome + ' esta na lista desta semana'
+          : j.nome + ' ainda nao jogou nenhum racha',
+      }));
+    });
+
+    var naLista = nuncaJogaram.filter(function (j) { return j.inscritoAgora; }).length;
+
+    return el('section', { class: 'card' }, [
+      el('div', { class: 'card-head' }, [
+        el('h2', { text: 'Ainda não estrearam' }),
+        el('p', {
+          class: 'sub',
+          text: nuncaJogaram.length + ' cadastrado' + (nuncaJogaram.length > 1 ? 's' : '') +
+            ' que não jogou nenhum dos ' + totalRachas + ' rachas' +
+            (naLista ? ' · ' + naLista + ' na lista desta semana' : ''),
+        }),
+      ]),
+      lista,
+    ]);
+  }
+
   // ── Convidados por padrinho ───────────────────────────────────────────
 
   function montarVolumeConvidados(volumeConvidados) {
@@ -504,6 +544,11 @@
     var todasAsDatas = dados.porRacha.map(function (r) { return r.data; });
     var presenca = montarPresenca(dados.presenca, dados.totalRachas, todasAsDatas);
     if (presenca) frag.appendChild(presenca);
+
+    // Logo depois da presenca: e a mesma pergunta ("quem vem?") vista pelo
+    // lado de quem ainda nao apareceu.
+    var estreia = montarNuncaJogaram(dados.nuncaJogaram, dados.totalRachas);
+    if (estreia) frag.appendChild(estreia);
 
     var volume = montarVolumeConvidados(dados.volumeConvidados);
     if (volume) frag.appendChild(volume);
