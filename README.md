@@ -205,6 +205,13 @@ vezes.
 **Desligado por padrão** de propósito: é o único ponto em que o bot escreve
 primeiro pra quem nunca falou com ele (ver "Sobre o número do bot").
 
+Pra testar de ponta a ponta sem ninguém entrar no grupo (funciona com a chave
+desligada), manda as perguntas pra um número que o bot já conhece:
+
+```
+docker compose exec bot npx tsx src/dev/testar-cadastro.ts 5534XXXXXXXXX
+```
+
 ## Sobre o número do bot
 
 O bot usa uma **linha pré-paga dedicada num celular antigo ligado 24/7**. Nunca o número

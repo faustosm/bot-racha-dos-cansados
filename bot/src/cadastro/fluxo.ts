@@ -137,17 +137,33 @@ export async function aoEntrarNoGrupo(log: Log, e: Entrou): Promise<void> {
   if (!criado) return;
 
   log.info({ jogadorId: jogador.id }, 'novo no grupo: cadastro iniciado');
-  enfileirar(log, {
-    tipo: 'texto',
-    para: telefone,
-    texto: [
-      `Fala! 👋 Sou o bot do ${config.RACHA_NOME}. Vi que você entrou no grupo, seja bem-vindo!`,
-      '',
-      'Pra te cadastrar no racha são 4 perguntas rápidas.',
-      '',
-      '*Qual seu nome?* (do jeito que vai aparecer na lista)',
-    ].join('\n'),
-  });
+  enfileirar(log, { tipo: 'texto', para: telefone, texto: boasVindas() });
+}
+
+const boasVindas = () =>
+  [
+    `Fala! 👋 Sou o bot do ${config.RACHA_NOME}. Vi que você entrou no grupo, seja bem-vindo!`,
+    '',
+    'Pra te cadastrar no racha são 4 perguntas rápidas.',
+    '',
+    '*Qual seu nome?* (do jeito que vai aparecer na lista)',
+  ].join('\n');
+
+/**
+ * Teste de ponta a ponta sem ninguem entrar no grupo (src/dev/testar-cadastro.ts):
+ * abre o questionario pra alguem que JA e jogador, como se tivesse acabado de
+ * entrar. Apaga o cadastro anterior dessa pessoa, pra poder repetir o teste.
+ * Funciona com CADASTRO_AO_ENTRAR desligado - a chave so controla o disparo
+ * automatico na entrada.
+ */
+export async function iniciarCadastroDeTeste(log: Log, telefone: string): Promise<boolean> {
+  const jogador = await buscarPorTelefone(telefone);
+  if (!jogador) return false;
+  await query('delete from cadastro_novo where jogador_id = $1', [jogador.id]);
+  await query(`insert into cadastro_novo (jogador_id, etapa) values ($1, 'nome')`, [jogador.id]);
+  await sendText(telefone, boasVindas());
+  log.info({ jogadorId: jogador.id }, 'cadastro de teste iniciado');
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +182,8 @@ export interface MensagemCadastro {
  * nao ha cadastro em andamento - ai a mensagem segue o caminho normal.
  */
 export async function continuarCadastro(m: MensagemCadastro): Promise<boolean> {
-  if (!config.CADASTRO_AO_ENTRAR) return false;
+  // Sem checar CADASTRO_AO_ENTRAR: so existe cadastro em andamento se ele foi
+  // aberto (pela entrada no grupo, com a chave ligada, ou pelo teste).
   const c = await carregar(m.jogadorId);
   if (!c) return false;
 
