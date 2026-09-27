@@ -33,6 +33,7 @@ import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
 import { publicarEstatisticas } from './estatisticas.js';
 import { sincronizarConvocadosNoApp } from './app-sync/sincronizar.js';
+import { fecharCadastrosVencidos } from './cadastro/fluxo.js';
 
 export interface Log {
   info: (obj: unknown, msg: string) => void;
@@ -669,6 +670,9 @@ export function iniciarAgendador(log: Log): void {
     );
     encerrarPartida(log).catch((err) =>
       log.warn({ err }, 'falha ao encerrar partida/publicar avaliacao'),
+    );
+    fecharCadastrosVencidos(log).catch((err) =>
+      log.warn({ err }, 'falha ao fechar cadastros vencidos'),
     );
   });
 

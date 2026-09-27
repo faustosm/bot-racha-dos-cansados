@@ -122,6 +122,19 @@ const schema = z.object({
   // aba "Sincronizacao na nuvem" do app - da acesso a editar/publicar TODO o
   // racha, nao so o campo convocado (o worker nao tem escopo mais fino).
   APP_SYNC_EDIT_TOKEN: z.string().default(''),
+
+  // --- Cadastro de quem entra no grupo --------------------------------------
+  // Quando alguem entra no GROUP_JID, o bot manda no privado 4 perguntas
+  // (nome, apelido, posicao, quem convidou), grava no banco e cadastra no app
+  // como convidado. DESLIGADO por padrao: e o bot puxando conversa com quem
+  // nunca falou com ele, e so liga quando o comite decidir.
+  CADASTRO_AO_ENTRAR: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Sem resposta nesse prazo, o cadastro fecha com o que tiver (o comite e
+  // avisado de que ficou incompleto).
+  CADASTRO_PRAZO_HORAS: z.coerce.number().int().positive().default(48),
 });
 
 const parsed = schema.safeParse(process.env);

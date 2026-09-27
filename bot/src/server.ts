@@ -4,6 +4,7 @@ import { migrate, pool } from './db.js';
 import { tratarMensagem, tratarVotoDeEnquete } from './handlers.js';
 import { iniciarAgendador } from './scheduler.js';
 import { invalidarCache, meuLid } from './grupo.js';
+import { aoEntrarNoGrupo } from './cadastro/fluxo.js';
 
 const app = Fastify({
   logger: {
@@ -53,6 +54,13 @@ interface WebhookBody {
     };
     // connection.update
     state?: string;
+    // group.participants.update: `id` e o grupo. `participants` sao os JIDs
+    // (@lid, normalmente) - em versoes novas do Baileys podem vir como objeto.
+    // `participantsData` e a Evolution resolvendo o telefone de cada um.
+    id?: string;
+    action?: string;
+    participants?: (string | { id?: string; phoneNumber?: string })[];
+    participantsData?: { jid?: string; phoneNumber?: string; name?: string }[];
   };
 }
 
@@ -211,6 +219,28 @@ async function handleMessagesUpsert(data: NonNullable<WebhookBody['data']>) {
   });
 }
 
+/**
+ * Quem entrou no grupo do racha, com lid e telefone de cada um.
+ *
+ * O `phoneNumber` de `participantsData` so e confiavel com sufixo
+ * @s.whatsapp.net: quando a Evolution nao acha o participante, ela preenche
+ * com os digitos do proprio @lid, que nao sao telefone nenhum. Sem telefone,
+ * aoEntrarNoGrupo busca na lista de participantes.
+ */
+function quemEntrou(data: NonNullable<WebhookBody['data']>) {
+  const ehTelefone = (v?: string) => v?.endsWith('@s.whatsapp.net') ?? false;
+  return (data.participants ?? []).map((p) => {
+    const jid = typeof p === 'string' ? p : p.id;
+    const extra = data.participantsData?.find((d) => d.jid === jid);
+    const candidatos = [jid, typeof p === 'string' ? undefined : p.phoneNumber, extra?.phoneNumber];
+    return {
+      lid: jid?.endsWith('@lid') ? jid : undefined,
+      telefone: candidatos.find(ehTelefone),
+      nomePerfil: extra?.name,
+    };
+  });
+}
+
 function handleConnectionUpdate(data: NonNullable<WebhookBody['data']>) {
   const state = data.state;
   if (state === 'open') {
@@ -242,6 +272,13 @@ async function handleEvent(body: WebhookBody) {
       // senao quem saiu continuaria sendo atendido ate o TTL expirar.
       invalidarCache();
       app.log.info({ data }, 'participantes do grupo mudaram, cache invalidado');
+      if (data.action === 'add' && data.id && data.id === config.GROUP_JID) {
+        for (const e of quemEntrou(data)) {
+          await aoEntrarNoGrupo(app.log, e).catch((err) =>
+            app.log.warn({ err }, 'falha ao iniciar cadastro de quem entrou'),
+          );
+        }
+      }
       break;
     case 'messages.update':
       // Nao usamos: o voto util chega em messages.upsert. Aqui vem so recibo

@@ -63,6 +63,8 @@ import type { ItemLista, Partida } from './domain/tipos.js';
 import { comoFalarComOBot } from './link.js';
 import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
+import { cadastroPorEnquete, continuarCadastro, registrarPosicao } from './cadastro/fluxo.js';
+import { OPCOES_POSICAO, posicaoDaOpcao } from './cadastro/respostas.js';
 
 export interface Contexto {
   /** Identificador de grupo (@lid). Ausente em algumas mensagens privadas. */
@@ -1399,6 +1401,12 @@ export async function tratarVotoDeEnquete(v: VotoRecebido): Promise<void> {
     return;
   }
 
+  const cadastro = await cadastroPorEnquete(v.enqueteId);
+  if (cadastro) {
+    await tratarVotoPosicaoCadastro(cadastro, v);
+    return;
+  }
+
   // warn, nao info: um voto pra um enqueteId que nao bate com nada e SEMPRE
   // um voto perdido de verdade - nao tem retry nem forma de recuperar o
   // conteudo depois (a enquete do WhatsApp e cifrada por enqueteId, sem casar
@@ -1625,6 +1633,23 @@ async function tratarVotoAvaliacao(
   );
 }
 
+/** Voto na enquete "Você joga de quê?" do cadastro de quem entrou no grupo. */
+async function tratarVotoPosicaoCadastro(
+  cadastro: { jogadorId: number; segredo: string },
+  v: VotoRecebido,
+): Promise<void> {
+  const hashes = decifrarOuAvisar(v, cadastro.segredo, 'nao consegui decifrar a posicao do cadastro');
+  if (!hashes) return;
+
+  const posicao = posicaoDaOpcao(opcoesEscolhidas(hashes, OPCOES_POSICAO)[0] ?? '');
+  if (!posicao) return; // desmarcou
+
+  const jogador = await buscarPorId(cadastro.jogadorId);
+  const jid = v.votanteTelefone ?? jogador?.telefone;
+  if (!jid) return;
+  await registrarPosicao(v.log, cadastro.jogadorId, jid, posicao);
+}
+
 // ---------------------------------------------------------------------------
 // Entrada
 // ---------------------------------------------------------------------------
@@ -1788,6 +1813,19 @@ async function processarPrivado(
     await definirNaoPerturbe(ctx.jogadorId, false);
     await noPrivado(ctx, 'Beleza, volto a te chamar quando precisar.');
     return undefined;
+  }
+
+  // Quem acabou de entrar no grupo esta respondendo o questionario de
+  // cadastro (cadastro/fluxo.ts). Vem antes da partida: o cadastro nao
+  // depende de lista aberta. Comando forte ("lista", "vou"...) passa direto.
+  if (!intencao || !COMANDOS_FORTES.has(intencao.tipo)) {
+    const tratada = await continuarCadastro({
+      jogadorId: ctx.jogadorId,
+      jidPrivado: ctx.jidPrivado,
+      texto: ctx.texto,
+      log: ctx.log,
+    });
+    if (tratada) return undefined;
   }
 
   const partida = await partidaAtual();

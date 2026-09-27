@@ -168,6 +168,10 @@ services:
       APP_SYNC_URL: ${APP_SYNC_URL:-https://rachadoscansados.com.br}
       APP_SYNC_RACHA_ID: ${APP_SYNC_RACHA_ID:-}
       APP_SYNC_EDIT_TOKEN: ${APP_SYNC_EDIT_TOKEN:-}
+
+      # Cadastro de quem entra no grupo (desligado por padrao).
+      CADASTRO_AO_ENTRAR: ${CADASTRO_AO_ENTRAR:-false}
+      CADASTRO_PRAZO_HORAS: ${CADASTRO_PRAZO_HORAS:-48}
     healthcheck:
       test:
         - CMD

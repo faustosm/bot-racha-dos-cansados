@@ -397,4 +397,37 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    // Cadastro de quem entra no grupo (27/09/2026, ver cadastro/fluxo.ts): o
+    // bot manda no privado 4 perguntas - nome, apelido, posicao, quem
+    // convidou - e ao final cadastra a pessoa no app. Uma linha por pessoa,
+    // para sempre: e tambem o que impede de perguntar de novo a quem sai e
+    // volta pro grupo.
+    //
+    // Fora da tabela `conversa` de proposito: aquela e presa a uma partida,
+    // expira em minutos e tem aviso de "ainda ta ai?" - o cadastro nao tem
+    // partida e espera a pessoa por dias (CADASTRO_PRAZO_HORAS).
+    //
+    // Numero 019 e nao 018: o branch da reserva ja usa 018.
+    name: '019_cadastro_novo',
+    sql: `
+      create table cadastro_novo (
+        jogador_id          int  primary key references jogador(id) on delete cascade,
+        etapa               text not null,
+        nome                text,
+        apelido             text,
+        posicao             text,
+        convidado_por_id    int  references jogador(id) on delete set null,
+        convidado_por_texto text,
+        candidatos          jsonb,
+        enquete_id          text,
+        enquete_segredo     text,
+        iniciado_em         timestamptz not null default now(),
+        atualizado_em       timestamptz not null default now(),
+        concluido_em        timestamptz,
+        completo            boolean
+      );
+      create index cadastro_novo_por_enquete on cadastro_novo (enquete_id);
+    `,
+  },
 ];

@@ -187,6 +187,24 @@ docker compose exec bot npx tsx src/dev/simular-sync-app.ts
 
 (só leitura — nunca publica nada, mesmo com o secret configurado).
 
+### Cadastro de quem entra no grupo
+
+Com `CADASTRO_AO_ENTRAR=true`, quando alguém entra no grupo o bot manda no
+privado 4 perguntas, uma por vez: **nome**, **apelido** (pode pular),
+**posição** (enquete de um toque; "linha"/"goleiro" por texto também vale) e
+**quem convidou** (o bot procura o nome entre os jogadores e confirma). No
+fim grava o nome escolhido, cadastra a pessoa no app como **convidado**, com
+telefone e nível "Grupo ?", e avisa o grupo do comitê. Fixo, goleiro
+contratado e nível ficam pro comitê ajustar no app.
+
+Quem não responde em `CADASTRO_PRAZO_HORAS` (48h) é cadastrado com o que
+tiver, sem cobrança, e o comitê é avisado de que ficou incompleto. Quem o bot
+já conhece (saiu e voltou) não recebe questionário, e ninguém recebe duas
+vezes.
+
+**Desligado por padrão** de propósito: é o único ponto em que o bot escreve
+primeiro pra quem nunca falou com ele (ver "Sobre o número do bot").
+
 ## Sobre o número do bot
 
 O bot usa uma **linha pré-paga dedicada num celular antigo ligado 24/7**. Nunca o número
