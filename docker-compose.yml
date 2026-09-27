@@ -168,6 +168,7 @@ services:
       APP_SYNC_URL: ${APP_SYNC_URL:-https://rachadoscansados.com.br}
       APP_SYNC_RACHA_ID: ${APP_SYNC_RACHA_ID:-}
       APP_SYNC_EDIT_TOKEN: ${APP_SYNC_EDIT_TOKEN:-}
+      CRON_FOTOS: ${CRON_FOTOS:-0 4 * * 1}
     healthcheck:
       test:
         - CMD

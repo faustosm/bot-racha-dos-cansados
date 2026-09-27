@@ -122,6 +122,10 @@ const schema = z.object({
   // aba "Sincronizacao na nuvem" do app - da acesso a editar/publicar TODO o
   // racha, nao so o campo convocado (o worker nao tem escopo mais fino).
   APP_SYNC_EDIT_TOKEN: z.string().default(''),
+  // Segunda 04:00: atualiza no app a miniatura da foto de perfil do WhatsApp
+  // de cada jogador com telefone (ver app-sync/fotos.ts). Semanal porque o
+  // link do WhatsApp expira e as pessoas trocam de foto.
+  CRON_FOTOS: z.string().default('0 4 * * 1'),
 });
 
 const parsed = schema.safeParse(process.env);

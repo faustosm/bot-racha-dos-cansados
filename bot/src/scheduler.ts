@@ -33,6 +33,7 @@ import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
 import { publicarEstatisticas } from './estatisticas.js';
 import { sincronizarConvocadosNoApp } from './app-sync/sincronizar.js';
+import { atualizarFotosNoApp } from './app-sync/fotos.js';
 
 export interface Log {
   info: (obj: unknown, msg: string) => void;
@@ -632,6 +633,7 @@ export function iniciarAgendador(log: Log): void {
     ['chamada', config.CRON_CHAMADA, () => chamadaDeSexta(log)],
     ['avaliacao', config.CRON_AVALIACAO, () => encerrarPartida(log)],
     ['estatisticas', config.CRON_ESTATISTICAS, () => publicarEstatisticas(log)],
+    ['fotos', config.CRON_FOTOS, () => atualizarFotosNoApp(log)],
   ];
 
   for (const [nome, expressao, fn] of tarefas) {

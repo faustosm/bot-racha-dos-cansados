@@ -154,6 +154,46 @@ export async function fetchGroupParticipants(
   }));
 }
 
+/**
+ * Resultado de pedir a foto de perfil: `semFoto` quando o WhatsApp responde
+ * que nao ha foto visivel pro bot (nao tem, ou a pessoa esconde de quem nao e
+ * contato); `erro` para falha passageira (rede, timeout) - ai quem chama nao
+ * deve concluir nada.
+ */
+export type FotoDePerfil =
+  | { tipo: 'foto'; bytes: Uint8Array; mime: string }
+  | { tipo: 'semFoto' }
+  | { tipo: 'erro'; motivo: string };
+
+/**
+ * Miniatura (96x96, ~2 KB) da foto de perfil. Usa a rota crua do Baileys
+ * porque a de alto nivel (/chat/fetchProfilePictureUrl) so pede a foto
+ * grande, que nao caberia no app (ver app-sync/fotos.ts).
+ */
+export async function fotoDePerfilMiniatura(jid: string): Promise<FotoDePerfil> {
+  let url: unknown;
+  try {
+    url = await request<unknown>(`/baileys/profilePictureUrl/${config.EVOLUTION_INSTANCE}`, {
+      method: 'POST',
+      body: { jid, type: 'preview' },
+    });
+  } catch (err) {
+    const corpo = err instanceof EvolutionError ? err.body : '';
+    if (/item-not-found|not-authorized|forbidden/i.test(corpo)) return { tipo: 'semFoto' };
+    return { tipo: 'erro', motivo: err instanceof Error ? err.message : String(err) };
+  }
+  if (typeof url !== 'string' || !url.startsWith('https://')) return { tipo: 'semFoto' };
+
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    if (!r.ok) return { tipo: 'erro', motivo: `download respondeu ${r.status}` };
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    return { tipo: 'foto', bytes, mime: r.headers.get('content-type') ?? 'image/jpeg' };
+  } catch (err) {
+    return { tipo: 'erro', motivo: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Estado da conexao: "open" | "connecting" | "close". */
 export function connectionState() {
   return request<{ instance: { state: string } }>(
