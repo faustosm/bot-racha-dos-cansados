@@ -143,9 +143,28 @@ export async function marcarOfertaGoleiro(
 
 export interface FixoConfirmado {
   readonly jogadorId: number;
+  readonly nome: string;
   readonly telefone: string | null;
   readonly lid: string | null;
   readonly naoPerturbe: boolean;
+}
+
+interface LinhaFixoConfirmado {
+  jogador_id: number;
+  nome: string;
+  telefone: string | null;
+  lid: string | null;
+  nao_perturbe: boolean;
+}
+
+function paraFixoConfirmado(r: LinhaFixoConfirmado): FixoConfirmado {
+  return {
+    jogadorId: r.jogador_id,
+    nome: r.nome,
+    telefone: r.telefone,
+    lid: r.lid,
+    naoPerturbe: r.nao_perturbe,
+  };
 }
 
 const SQL_FIXOS_CONFIRMADOS = `
@@ -157,7 +176,8 @@ const SQL_FIXOS_CONFIRMADOS = `
        and i.removido_em is null
        and i.posicao = 'linha'
   )
-  select j.id as jogador_id, j.telefone, j.lid, j.nao_perturbe
+  select j.id as jogador_id, coalesce(j.nome_escolhido, j.nome) as nome,
+         j.telefone, j.lid, j.nao_perturbe
     from linha l
     join jogador j on j.id = l.jogador_id
     join partida p on p.id = $1
@@ -167,9 +187,10 @@ const SQL_FIXOS_CONFIRMADOS = `
 
 /**
  * Quem efetivamente jogou, para a avaliacao pos-jogo (ver scheduler.ts,
- * `encerrarPartida`). Mesma fonte de verdade de `listar` (fixo de linha
- * confirmado) - so que aqui interessa telefone/lid/nao_perturbe da PESSOA,
- * nao o nome para exibir na lista.
+ * `encerrarPartida`) e para a sincronizacao de convocados no app (ver
+ * app-sync/sincronizar.ts). Mesma fonte de verdade de `listar` (fixo de
+ * linha confirmado) - so que aqui interessa telefone/lid/nao_perturbe da
+ * PESSOA, alem do nome para exibir.
  *
  * So os CONVOCADOS (`pos <= vagas_total`): quem ficou na reserva ate o fim
  * nao jogou, e pedir nota do jogo a quem nao jogou e tao errado quanto mandar
@@ -178,18 +199,34 @@ const SQL_FIXOS_CONFIRMADOS = `
 export async function listarFixosConfirmados(
   partidaId: number,
 ): Promise<FixoConfirmado[]> {
-  const rows = await query<{
-    jogador_id: number;
-    telefone: string | null;
-    lid: string | null;
-    nao_perturbe: boolean;
-  }>(SQL_FIXOS_CONFIRMADOS, [partidaId]);
-  return rows.map((r) => ({
-    jogadorId: r.jogador_id,
-    telefone: r.telefone,
-    lid: r.lid,
-    naoPerturbe: r.nao_perturbe,
-  }));
+  const rows = await query<LinhaFixoConfirmado>(SQL_FIXOS_CONFIRMADOS, [partidaId]);
+  return rows.map(paraFixoConfirmado);
+}
+
+const SQL_GOLEIROS_FIXOS_CONFIRMADOS = `
+  select j.id as jogador_id, coalesce(j.nome_escolhido, j.nome) as nome,
+         j.telefone, j.lid, j.nao_perturbe
+    from inscricao i
+    join jogador j on j.id = i.jogador_id
+   where i.partida_id = $1
+     and i.removido_em is null
+     and i.posicao = 'gol'
+     and i.tipo = 'fixo'
+`;
+
+/**
+ * Goleiros fixos confirmados, para a sincronizacao de convocados no app (ver
+ * app-sync/sincronizar.ts). Sem CTE de fila como `listarFixosConfirmados`:
+ * goleiro fixo nunca fica em reserva, e bloqueio rigido na entrada
+ * (`motivoRecusaGoleiro`) - todo `tipo = 'fixo'` aqui ja esta dentro do teto.
+ */
+export async function listarGoleirosConfirmados(
+  partidaId: number,
+): Promise<FixoConfirmado[]> {
+  const rows = await query<LinhaFixoConfirmado>(SQL_GOLEIROS_FIXOS_CONFIRMADOS, [
+    partidaId,
+  ]);
+  return rows.map(paraFixoConfirmado);
 }
 
 /**

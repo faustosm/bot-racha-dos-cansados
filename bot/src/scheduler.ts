@@ -32,6 +32,7 @@ import { buscarPorId, buscarPorTelefone } from './domain/jogador.js';
 import { ehMembro } from './grupo.js';
 import { enfileirar } from './fila.js';
 import { publicarEstatisticas } from './estatisticas.js';
+import { sincronizarConvocadosNoApp } from './app-sync/sincronizar.js';
 
 export interface Log {
   info: (obj: unknown, msg: string) => void;
@@ -343,6 +344,13 @@ async function fecharLista(log: Log): Promise<void> {
       '',
       formatarLista(partida, itens, goleiros, config.RACHA_NOME),
     ].join('\n'),
+  );
+
+  // Best-effort, DEPOIS do anuncio critico: o anuncio no grupo e sensivel a
+  // horario (2h antes do jogo) e nao pode esperar nem falhar por causa da
+  // sincronizacao com o app, que e so conveniencia (ver app-sync/sincronizar.ts).
+  await sincronizarConvocadosNoApp(log, partida).catch((err) =>
+    log.warn({ err, partida: partida.data_jogo }, 'falha ao sincronizar convocados no app'),
   );
 }
 

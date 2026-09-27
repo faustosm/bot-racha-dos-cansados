@@ -110,6 +110,18 @@ const schema = z.object({
   // media "congelada" cedo demais. `publicarArquivo` so commita se o
   // conteudo mudou, entao rodar todo dia nao gera build a toa no Cloudflare.
   CRON_ESTATISTICAS: z.string().default('0 3 * * *'),
+
+  // --- Sincronizacao de convocados no app (rachadoscansados) ----------------
+  // Ao fechar a lista (CRON_FECHA), o bot marca automaticamente convocado=true
+  // no app para quem confirmou como fixo (linha dentro das vagas, ou goleiro
+  // fixo). So ADITIVO: nunca desliga convocado de ninguem. Vazio (RACHA_ID ou
+  // EDIT_TOKEN) desliga a sincronizacao (default seguro pra dev/self-host).
+  APP_SYNC_URL: z.string().url().default('https://rachadoscansados.com.br'),
+  APP_SYNC_RACHA_ID: z.string().default(''),
+  // Token de EDICAO do racha (nao o de dono nem o de visualizacao). Gerado na
+  // aba "Sincronizacao na nuvem" do app - da acesso a editar/publicar TODO o
+  // racha, nao so o campo convocado (o worker nao tem escopo mais fino).
+  APP_SYNC_EDIT_TOKEN: z.string().default(''),
 });
 
 const parsed = schema.safeParse(process.env);

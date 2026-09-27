@@ -160,6 +160,33 @@ edita aqui.
 
 Precisa do `GITHUB_TOKEN` no `.env`, o mesmo das estatísticas.
 
+## Convocação automática no app (rachadoscansados)
+
+Quando a lista fecha no sábado de manhã (`CRON_FECHA`, 2h antes do jogo), o
+bot marca automaticamente `convocado = true` no app pra quem confirmou
+presença como fixo (linha dentro das vagas, ou goleiro fixo) — casando por
+telefone. É **só aditiva**: nunca desliga convocação de ninguém (nem
+convidado, que nunca tem telefone próprio no bot, nem alguém convocado
+manualmente por outro motivo) — se um fixo confirmado não tiver telefone
+correspondente cadastrado no app, o bot avisa o grupo do comitê
+(`GRUPO_ADMIN_JID`) em vez de adivinhar ou criar cadastro novo.
+
+Pré-requisito: o racha precisa estar com a "Sincronização na nuvem" ativada
+no app (aba correspondente), e o bot precisa do `id` do racha + o **token de
+edição** (não o de dono nem o de visualização) configurados em
+`APP_SYNC_RACHA_ID`/`APP_SYNC_EDIT_TOKEN` no `.env` — ver `.env.example` para
+onde gerar isso. Esse token dá acesso de edição completa do racha, não só ao
+campo de convocação.
+
+Vazio, a sincronização fica desligada e nada muda no fluxo manual de hoje.
+Pra conferir o casamento de telefones antes de confiar na automação:
+
+```
+docker compose exec bot npx tsx src/dev/simular-sync-app.ts
+```
+
+(só leitura — nunca publica nada, mesmo com o secret configurado).
+
 ## Sobre o número do bot
 
 O bot usa uma **linha pré-paga dedicada num celular antigo ligado 24/7**. Nunca o número
