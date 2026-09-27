@@ -163,6 +163,11 @@ services:
       GITHUB_REPO: ${GITHUB_REPO:-faustosm/rachadoscansados}
       GITHUB_ESTATISTICAS_PATH: ${GITHUB_ESTATISTICAS_PATH:-public/estatisticas.json}
       CRON_ESTATISTICAS: ${CRON_ESTATISTICAS:-0 3 * * *}
+
+      # Sincronizacao de convocados com o app (desligada sem RACHA_ID/EDIT_TOKEN).
+      APP_SYNC_URL: ${APP_SYNC_URL:-https://rachadoscansados.com.br}
+      APP_SYNC_RACHA_ID: ${APP_SYNC_RACHA_ID:-}
+      APP_SYNC_EDIT_TOKEN: ${APP_SYNC_EDIT_TOKEN:-}
     healthcheck:
       test:
         - CMD
